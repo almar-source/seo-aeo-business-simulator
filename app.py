@@ -7,6 +7,7 @@ from engines.scoring import compute_scores, label
 from engines.diagnosis import executive_brief, strongest_and_weakest
 from engines.recommendations import get_recommendations, seven_day_plan
 from engines.simulation import simulate, action_explanation
+from engines.content_analyzer import analyze_article, read_articles_csv, analyze_articles_dataframe
 
 st.set_page_config(page_title="Trust & Visibility Intelligence Platform", layout="wide")
 
@@ -111,8 +112,8 @@ inputs = {
 }
 business = {'monthly_sessions': monthly_sessions, 'visitor_to_lead': visitor_to_lead, 'lead_to_customer': lead_to_customer, 'avg_deal_value': avg_deal_value}
 
-st.title("Trust & Visibility Intelligence Platform 2.2")
-st.caption("Visual first + recomendaciones simples y dinámicas")
+st.title("Trust & Visibility Intelligence Platform 2.3")
+st.caption("Visual first + acciones dinámicas + Article Analyzer BLUF")
 st.write("La herramienta muestra primero dónde está el negocio y luego traduce los datos en acciones concretas.")
 
 # ---------- uploads ----------
@@ -257,6 +258,77 @@ plan = seven_day_plan(recs)
 plan_df = pd.DataFrame(plan, columns=['Día', 'Acción recomendada'])
 st.dataframe(plan_df, use_container_width=True, hide_index=True)
 
+
+# ---------- ARTICLE ANALYZER ----------
+st.header("5. Article Analyzer: BLUF + SEO/AEO")
+st.write("Este módulo revisa si un artículo abre con la idea principal, si está estructurado para SEO/AEO y si ayuda a convertir.")
+
+article_tabs = st.tabs(["Analizar un artículo", "Analizar CSV de artículos"] )
+
+with article_tabs[0]:
+    at1, at2 = st.columns([1, 1])
+    with at1:
+        article_title = st.text_input("Título del artículo", "")
+        article_url = st.text_input("URL opcional", "")
+    with at2:
+        st.caption("Pega el contenido del artículo. Puede ser texto, HTML o markdown exportado de Webflow.")
+    article_text = st.text_area("Contenido del artículo", height=260, placeholder="Pega aquí el artículo completo...")
+    if article_text.strip():
+        analysis = analyze_article(article_text, article_title, article_url)
+        st.subheader("Resultado del artículo")
+        a1, a2, a3, a4, a5, a6 = st.columns(6)
+        a1.metric("Overall", f"{analysis['overall']}/100")
+        a2.metric("BLUF", f"{analysis['bluf']}/100")
+        a3.metric("SEO", f"{analysis['seo']}/100")
+        a4.metric("AEO/GEO", f"{analysis['aeo']}/100")
+        a5.metric("Trust", f"{analysis['trust']}/100")
+        a6.metric("Conversión", f"{analysis['conversion']}/100")
+
+        article_breakdown = pd.DataFrame({
+            'Factor': ['BLUF','Estructura','SEO','AEO/GEO','Trust','Conversión'],
+            'Score': [analysis['bluf'], analysis['structure'], analysis['seo'], analysis['aeo'], analysis['trust'], analysis['conversion']]
+        })
+        fig_article = go.Figure(go.Bar(x=article_breakdown['Factor'], y=article_breakdown['Score'], text=article_breakdown['Score'], textposition='outside'))
+        fig_article.update_layout(yaxis_range=[0,100], height=330, margin=dict(l=20,r=20,t=30,b=20))
+        st.plotly_chart(fig_article, use_container_width=True)
+
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.markdown("### Lectura simple")
+            if analysis['bluf'] < 70:
+                st.warning("El artículo tarda en llegar a la idea principal. Conviene abrir con una conclusión clara en las primeras líneas.")
+            else:
+                st.success("El artículo tiene una apertura relativamente clara y orientada a BLUF.")
+            st.write(f"Palabras: **{analysis['word_count']}** | Subtítulos detectados: **{analysis['headings']}** | Promedio palabras/párrafo: **{analysis['avg_paragraph_words']}**")
+            with st.expander("Notas BLUF", expanded=False):
+                for note in analysis['bluf_notes']:
+                    st.write("• " + note)
+        with col_right:
+            st.markdown("### Acciones recomendadas")
+            for action in analysis['actions']:
+                st.write("• " + action)
+
+with article_tabs[1]:
+    articles_file = st.file_uploader("CSV de artículos", type=["csv"], key="articles_csv")
+    st.caption("Columnas ideales: title, url, content. También intenta detectar body, text, article, contenido o description.")
+    if articles_file is not None:
+        df_articles = read_articles_csv(articles_file)
+        batch_results, missing_cols = analyze_articles_dataframe(df_articles)
+        if missing_cols:
+            st.error("No encontré una columna de contenido. Columnas detectadas: " + ", ".join(missing_cols))
+        else:
+            st.subheader("Resumen de artículos")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Artículos analizados", len(batch_results))
+            c2.metric("BLUF promedio", int(batch_results['BLUF'].mean()))
+            c3.metric("AEO/GEO promedio", int(batch_results['AEO/GEO'].mean()))
+            c4.metric("Conversión promedio", int(batch_results['Conversion'].mean()))
+            fig_batch = go.Figure(go.Bar(x=['Overall','BLUF','SEO','AEO/GEO','Trust','Conversion'], y=[batch_results['Overall'].mean(), batch_results['BLUF'].mean(), batch_results['SEO'].mean(), batch_results['AEO/GEO'].mean(), batch_results['Trust'].mean(), batch_results['Conversion'].mean()]))
+            fig_batch.update_layout(yaxis_range=[0,100], height=330, margin=dict(l=20,r=20,t=30,b=20), title="Promedios del contenido")
+            st.plotly_chart(fig_batch, use_container_width=True)
+            st.dataframe(batch_results.sort_values('Overall'), use_container_width=True, hide_index=True)
+            st.download_button("Descargar análisis de artículos CSV", data=batch_results.to_csv(index=False).encode('utf-8'), file_name='article_bluf_analysis.csv', mime='text/csv')
+
 # ---------- TECH DETAILS BELOW ----------
 with st.expander("Detalles técnicos y fórmula de scores", expanded=False):
     st.write("**Authority Score** no es igual a DR. Combina DR, referring domains, backlinks, brand mentions y menciones en medios.")
@@ -264,7 +336,7 @@ with st.expander("Detalles técnicos y fórmula de scores", expanded=False):
     st.write("**Visibility Score** combina Authority, Content, Technical SEO, AEO/GEO, Social y Email.")
     st.dataframe(breakdown, use_container_width=True, hide_index=True)
 
-st.header("5. Export")
+st.header("6. Export")
 export_rows = []
 for r in recs:
     export_rows.append({

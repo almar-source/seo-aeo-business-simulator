@@ -1,27 +1,38 @@
-# Trust & Visibility Intelligence Platform 2.2
+# Trust & Visibility Intelligence Platform 2.3
 
-Versión visual-first con recomendaciones simples y dinámicas.
+Versión modular con dashboard visual, recomendaciones dinámicas y nuevo módulo **Article Analyzer / BLUF Checker**.
 
-## Cambios principales
+## Incluye
+- Trust Score, Visibility Score, AI Search Readiness y Authority Score.
+- Recomendaciones simples que cambian según los datos.
+- Simulador de acciones: artículos, páginas, FAQs, LinkedIn, email y referring domains.
+- Plan de 7 días.
+- Carga opcional de GSC, GA4, LinkedIn, Social Media y Email.
+- Nuevo módulo para analizar artículos por:
+  - BLUF
+  - estructura
+  - SEO
+  - AEO/GEO
+  - trust
+  - conversión
+- Análisis individual pegando texto.
+- Análisis masivo subiendo CSV de artículos.
 
-- La parte visual aparece arriba: Trust, Visibility, AI Search, Authority y gráfico de breakdown.
-- Las recomendaciones son acciones sencillas, en tabla, y cambian según los datos.
-- La explicación larga queda colapsada para no confundir.
-- El simulador explica qué pasa si publicas más artículos, actualizas páginas, haces LinkedIn, email, FAQs, casos o consigues referring domains.
-- Mantiene la arquitectura modular.
+## CSV de artículos recomendado
+Columnas ideales:
+- `title`
+- `url`
+- `content`
+
+También intenta detectar: `body`, `text`, `article`, `contenido`, `description`.
 
 ## Deploy
-
 Sube todo a GitHub en la raíz:
+- `app.py`
+- `requirements.txt`
+- `engines/`
+- `parsers/`
+- `knowledge/`
+- `modules/`
 
-```text
-app.py
-engines/
-parsers/
-knowledge/
-modules/
-requirements.txt
-README.md
-```
-
-Luego en Streamlit: Manage app -> Reboot app.
+Luego reinicia Streamlit.
