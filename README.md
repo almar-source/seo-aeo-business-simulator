@@ -1,22 +1,55 @@
-# SEO + AEO Business Impact Simulator
+# SEO + AEO/GEO + Business Impact Simulator v3
 
-A Streamlit app to simulate SEO, AEO/GEO readiness and business impact without using AI tokens.
+Simulador en Streamlit para proyectar impacto SEO, AEO/GEO, contenido, email marketing y negocio.
 
-## Run locally
+## Qué incluye
+
+- Carga de CSV de Google Search Console
+- Carga de CSV de GA4
+- Carga de CSV de YouTube Analytics
+- Carga de CSV de Email Marketing
+- Simulación de cambios de contenido:
+  - páginas actualizadas
+  - nuevas páginas/artículos
+  - FAQs/direct answers
+  - casos/testimonios
+  - links internos
+  - mejoras en title/meta
+  - cobertura temática
+  - pruebas/E-E-A-T
+- Simulación de email:
+  - tamaño de lista
+  - campañas por mes
+  - open rate
+  - click rate
+  - mejoras por asunto, CTA, segmentación y relevancia
+- Proyección de:
+  - ranking promedio
+  - CTR
+  - sesiones
+  - leads
+  - oportunidades
+  - clientes
+  - revenue mensual incremental
+- Export de reporte CSV
+
+## Instalación local
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## What it does
+## Deploy en Streamlit
 
-- Scores current SEO, content, authority and AEO/GEO readiness.
-- Lets you select improvement actions.
-- Projects visibility lift.
-- Translates the projected lift into sessions, leads, opportunities, clients and revenue.
-- Exports the simulation to CSV.
+Sube estos archivos al repositorio de GitHub conectado a Streamlit:
 
-## Why it does not consume tokens
+- `app.py`
+- `requirements.txt`
+- `README.md`
 
-The simulator uses fixed scoring rules in Python. AI can be added later as an optional button to generate a written recommendation only when needed.
+Streamlit hará redeploy automático.
+
+## Nota
+
+No usa OpenAI API ni consume tokens. Las proyecciones son heurísticas para planificación, priorización y explicación de impacto de negocio.
