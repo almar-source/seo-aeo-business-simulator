@@ -8,6 +8,7 @@ import streamlit as st
 st.set_page_config(page_title="SEO + AEO + Business Impact Simulator", layout="wide")
 
 st.title("SEO + AEO/GEO + Business Impact Simulator")
+st.caption("Versión v3.3 con lector robusto para exports irregulares de GA4")
 st.caption("Carga datos reales de GSC, GA4, YouTube y Email Marketing. Simula cómo cambios de contenido, acciones offsite y campañas afectan ranking, tráfico, leads y revenue.")
 
 # -----------------------------
@@ -30,6 +31,103 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
+
+def try_parse_sectioned_csv(raw: bytes) -> pd.DataFrame | None:
+    """Parse GA4 exports that contain many small CSV tables in one file.
+
+    Example:
+    # Start date...
+    Nth week,Active users
+    0000,29
+    ...
+
+    # Start date...
+    Nth week,New users
+    0000,27
+
+    Pandas read_csv can fail because the file has repeated headers and sections.
+    This function merges those sections into one table using the first column
+    as the dimension, usually nth_week, date, channel, source, or page.
+    """
+    text = None
+    for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+        try:
+            text = raw.decode(enc)
+            break
+        except Exception:
+            continue
+    if not text:
+        return None
+
+    import csv
+    lines = text.splitlines()
+    sections = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line or line.startswith("#"):
+            i += 1
+            continue
+        try:
+            header = next(csv.reader([line]))
+        except Exception:
+            i += 1
+            continue
+        header = [h.strip() for h in header]
+        if len(header) < 2:
+            i += 1
+            continue
+
+        rows = []
+        j = i + 1
+        while j < len(lines):
+            row_line = lines[j].strip()
+            if not row_line:
+                break
+            if row_line.startswith("#"):
+                break
+            try:
+                row = next(csv.reader([row_line]))
+            except Exception:
+                break
+            if len(row) != len(header):
+                break
+            # A repeated header means a new section starts.
+            if [x.strip().lower() for x in row] == [x.strip().lower() for x in header]:
+                break
+            rows.append([x.strip() for x in row])
+            j += 1
+
+        if rows and len(rows) >= 2:
+            section = pd.DataFrame(rows, columns=header)
+            sections.append(section)
+        i = max(j + 1, i + 1)
+
+    if not sections:
+        return None
+
+    normalized_sections = []
+    for idx, sec in enumerate(sections):
+        nsec = normalize_columns(sec)
+        if len(nsec.columns) >= 2:
+            nsec["_section_number"] = idx + 1
+            nsec["_section_dimension"] = nsec.columns[0]
+            normalized_sections.append(nsec)
+
+    if not normalized_sections:
+        return None
+
+    # Keep all GA4 mini-tables. Outer concat lets ga4_metrics find sessions,
+    # users, conversions, channel tables, and page tables even when they were
+    # exported as separate blocks in one CSV file.
+    combined = pd.concat(normalized_sections, ignore_index=True, sort=False)
+    combined = combined.dropna(how="all")
+    if len(combined.columns) >= 2 and len(combined) > 0:
+        return combined
+    return None
+
+
 def find_col(df: pd.DataFrame, candidates):
     cols = list(df.columns)
     for c in candidates:
@@ -50,13 +148,69 @@ def to_numeric(series):
 
 
 def read_uploaded_csv(uploaded_file):
+    """Read messy CSV exports from GA4, GSC, YouTube, Mailchimp, HubSpot, etc.
+
+    GA4 exports often include metadata rows, notes, different separators, or irregular
+    rows. This reader tries multiple encodings, delimiters, and header offsets instead
+    of crashing the Streamlit app.
+    """
     if uploaded_file is None:
         return None
-    try:
-        return normalize_columns(pd.read_csv(uploaded_file))
-    except Exception:
-        uploaded_file.seek(0)
-        return normalize_columns(pd.read_csv(uploaded_file, encoding="latin-1"))
+
+    raw = uploaded_file.getvalue()
+    if not raw:
+        return None
+
+    # Remove UTF-8 BOM if present.
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+
+    # GA4 Acquisition Overview often exports as multiple small CSV tables in one file.
+    # Parse that structure first, because regular read_csv may crash or select only one table.
+    sectioned = try_parse_sectioned_csv(raw)
+    if sectioned is not None and not sectioned.empty:
+        return sectioned
+
+    # First pass: try flexible CSV parsing with multiple encodings and skipped rows.
+    encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
+    seps = [None, ",", ";", "\t"]
+    best_df = None
+
+    for enc in encodings:
+        for skiprows in range(0, 20):
+            for sep in seps:
+                try:
+                    df = pd.read_csv(
+                        io.BytesIO(raw),
+                        encoding=enc,
+                        sep=sep,
+                        engine="python",
+                        skiprows=skiprows,
+                        on_bad_lines="skip",
+                    )
+                    df = df.dropna(how="all")
+                    df = df.loc[:, ~df.columns.astype(str).str.contains(r"^Unnamed", case=False, regex=True)]
+                    if df.empty or len(df.columns) < 2:
+                        continue
+                    norm = normalize_columns(df)
+                    useful_names = " ".join(norm.columns.astype(str).tolist())
+                    signal_words = [
+                        "session", "users", "views", "event", "conversion", "revenue",
+                        "click", "impression", "query", "page", "opens", "sent", "delivered",
+                        "video", "watch", "subscribers"
+                    ]
+                    score = sum(1 for w in signal_words if w in useful_names) + min(len(norm), 100) / 100
+                    if best_df is None or score > best_df[0]:
+                        best_df = (score, norm)
+                except Exception:
+                    continue
+
+    if best_df is not None:
+        return best_df[1]
+
+    # Last-resort fallback: make the error visible but do not break the app.
+    st.warning(f"No pude leer el archivo {uploaded_file.name}. Revisa que sea CSV exportado como tabla, no PDF/HTML.")
+    return None
 
 
 def gsc_metrics(df):

@@ -53,3 +53,11 @@ Streamlit hará redeploy automático.
 ## Nota
 
 No usa OpenAI API ni consume tokens. Las proyecciones son heurísticas para planificación, priorización y explicación de impacto de negocio.
+
+## Update v3.2
+
+This version adds a safer CSV reader for GA4 exports such as **Acquisition overview.csv**, where Google Analytics includes several mini tables and metadata lines in the same CSV file. The app now reads those files without crashing and extracts sessions, active users, channel data, and other available metrics when present.
+
+
+## v3.3
+Incluye lector robusto para CSVs de GA4 con múltiples mini-tablas, metadata rows y filas irregulares.
