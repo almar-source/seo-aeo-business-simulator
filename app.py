@@ -1,868 +1,472 @@
 import io
+import re
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="SEO + AEO + Business Impact Simulator", layout="wide")
+st.set_page_config(page_title="Trust & Visibility Intelligence Platform", page_icon="📈", layout="wide")
 
-st.title("SEO + AEO/GEO + Business Impact Simulator")
-st.caption("Versión v4.0 con Trust Score y carga de Ahrefs CSV")
-st.caption("Carga datos reales de GSC, GA4, YouTube, Email Marketing y Ahrefs. Simula cómo cambios de contenido, acciones offsite y campañas afectan ranking, tráfico, leads y revenue.")
+APP_VERSION = "v5.0 Trust + Visibility + Social + 7-Day Sprint"
 
 # -----------------------------
-# Utility functions
+# Helpers
 # -----------------------------
-def clamp(value, min_value=0, max_value=100):
-    return max(min_value, min(max_value, float(value)))
+
+def clamp(x, low=0, high=100):
+    try:
+        return max(low, min(high, float(x)))
+    except Exception:
+        return 0
 
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def safe_div(a, b):
+    try:
+        if b in [0, None] or pd.isna(b):
+            return 0
+        return float(a) / float(b)
+    except Exception:
+        return 0
+
+
+def normalize_columns(df):
     df = df.copy()
-    df.columns = [
-        str(c).strip().lower()
-        .replace(" ", "_")
-        .replace("%", "pct")
-        .replace("/", "_")
-        .replace("-", "_")
-        for c in df.columns
-    ]
+    df.columns = [str(c).strip().lower().replace(" ", "_").replace("-", "_") for c in df.columns]
     return df
 
 
-
-
-def try_parse_sectioned_csv(raw: bytes) -> pd.DataFrame | None:
-    """Parse GA4 exports that contain many small CSV tables in one file.
-
-    Example:
-    # Start date...
-    Nth week,Active users
-    0000,29
-    ...
-
-    # Start date...
-    Nth week,New users
-    0000,27
-
-    Pandas read_csv can fail because the file has repeated headers and sections.
-    This function merges those sections into one table using the first column
-    as the dimension, usually nth_week, date, channel, source, or page.
-    """
-    text = None
-    for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+def read_any_csv(uploaded_file):
+    if uploaded_file is None:
+        return None
+    raw = uploaded_file.getvalue()
+    for enc in ["utf-8", "utf-8-sig", "latin1"]:
         try:
             text = raw.decode(enc)
             break
         except Exception:
-            continue
-    if not text:
+            text = None
+    if text is None:
         return None
 
-    import csv
-    lines = text.splitlines()
-    sections = []
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line or line.startswith("#"):
-            i += 1
-            continue
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    # Try normal csv first
+    for skip in range(0, min(12, len(lines))):
         try:
-            header = next(csv.reader([line]))
+            df = pd.read_csv(io.StringIO("\n".join(lines[skip:])))
+            if df.shape[1] >= 2 and df.shape[0] >= 1:
+                return normalize_columns(df)
         except Exception:
-            i += 1
-            continue
-        header = [h.strip() for h in header]
-        if len(header) < 2:
-            i += 1
-            continue
-
-        rows = []
-        j = i + 1
-        while j < len(lines):
-            row_line = lines[j].strip()
-            if not row_line:
-                break
-            if row_line.startswith("#"):
-                break
-            try:
-                row = next(csv.reader([row_line]))
-            except Exception:
-                break
-            if len(row) != len(header):
-                break
-            # A repeated header means a new section starts.
-            if [x.strip().lower() for x in row] == [x.strip().lower() for x in header]:
-                break
-            rows.append([x.strip() for x in row])
-            j += 1
-
-        if rows and len(rows) >= 2:
-            section = pd.DataFrame(rows, columns=header)
-            sections.append(section)
-        i = max(j + 1, i + 1)
-
-    if not sections:
+            pass
+    # fallback comma separated parsing
+    try:
+        df = pd.read_csv(io.BytesIO(raw), engine="python", on_bad_lines="skip")
+        return normalize_columns(df)
+    except Exception:
         return None
 
-    normalized_sections = []
-    for idx, sec in enumerate(sections):
-        nsec = normalize_columns(sec)
-        if len(nsec.columns) >= 2:
-            nsec["_section_number"] = idx + 1
-            nsec["_section_dimension"] = nsec.columns[0]
-            normalized_sections.append(nsec)
 
-    if not normalized_sections:
+def find_col(df, candidates):
+    if df is None or df.empty:
         return None
-
-    # Keep all GA4 mini-tables. Outer concat lets ga4_metrics find sessions,
-    # users, conversions, channel tables, and page tables even when they were
-    # exported as separate blocks in one CSV file.
-    combined = pd.concat(normalized_sections, ignore_index=True, sort=False)
-    combined = combined.dropna(how="all")
-    if len(combined.columns) >= 2 and len(combined) > 0:
-        return combined
-    return None
-
-
-def find_col(df: pd.DataFrame, candidates):
     cols = list(df.columns)
-    for c in candidates:
-        if c in cols:
-            return c
+    for cand in candidates:
+        cand_norm = cand.lower().replace(" ", "_").replace("-", "_")
+        if cand_norm in cols:
+            return cand_norm
     for col in cols:
-        for c in candidates:
-            if c in col:
+        for cand in candidates:
+            if cand.lower().replace(" ", "_") in col:
                 return col
     return None
 
 
-def to_numeric(series):
-    return pd.to_numeric(
-        series.astype(str).str.replace(",", "", regex=False).str.replace("%", "", regex=False),
-        errors="coerce",
-    ).fillna(0)
+def to_num(series):
+    if series is None:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(series.astype(str).str.replace("%", "", regex=False).str.replace(",", "", regex=False), errors="coerce").fillna(0)
 
 
-def read_uploaded_csv(uploaded_file):
-    """Read messy CSV exports from GA4, GSC, YouTube, Mailchimp, HubSpot, etc.
-
-    GA4 exports often include metadata rows, notes, different separators, or irregular
-    rows. This reader tries multiple encodings, delimiters, and header offsets instead
-    of crashing the Streamlit app.
-    """
-    if uploaded_file is None:
-        return None
-
-    raw = uploaded_file.getvalue()
-    if not raw:
-        return None
-
-    # Remove UTF-8 BOM if present.
-    if raw.startswith(b"\xef\xbb\xbf"):
-        raw = raw[3:]
-
-    # GA4 Acquisition Overview often exports as multiple small CSV tables in one file.
-    # Parse that structure first, because regular read_csv may crash or select only one table.
-    sectioned = try_parse_sectioned_csv(raw)
-    if sectioned is not None and not sectioned.empty:
-        return sectioned
-
-    # First pass: try flexible CSV parsing with multiple encodings and skipped rows.
-    encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
-    seps = [None, ",", ";", "\t"]
-    best_df = None
-
-    for enc in encodings:
-        for skiprows in range(0, 20):
-            for sep in seps:
-                try:
-                    df = pd.read_csv(
-                        io.BytesIO(raw),
-                        encoding=enc,
-                        sep=sep,
-                        engine="python",
-                        skiprows=skiprows,
-                        on_bad_lines="skip",
-                    )
-                    df = df.dropna(how="all")
-                    df = df.loc[:, ~df.columns.astype(str).str.contains(r"^Unnamed", case=False, regex=True)]
-                    if df.empty or len(df.columns) < 2:
-                        continue
-                    norm = normalize_columns(df)
-                    useful_names = " ".join(norm.columns.astype(str).tolist())
-                    signal_words = [
-                        "session", "users", "views", "event", "conversion", "revenue",
-                        "click", "impression", "query", "page", "opens", "sent", "delivered",
-                        "video", "watch", "subscribers"
-                    ]
-                    score = sum(1 for w in signal_words if w in useful_names) + min(len(norm), 100) / 100
-                    if best_df is None or score > best_df[0]:
-                        best_df = (score, norm)
-                except Exception:
-                    continue
-
-    if best_df is not None:
-        return best_df[1]
-
-    # Last-resort fallback: make the error visible but do not break the app.
-    st.warning(f"No pude leer el archivo {uploaded_file.name}. Revisa que sea CSV exportado como tabla, no PDF/HTML.")
-    return None
+def score_from_count(value, target):
+    return clamp((safe_div(value, target)) * 100)
 
 
-def gsc_metrics(df):
-    if df is None or df.empty:
-        return None
-    clicks_col = find_col(df, ["clicks", "clics"])
-    impressions_col = find_col(df, ["impressions", "impresiones"])
-    ctr_col = find_col(df, ["ctr"])
-    pos_col = find_col(df, ["position", "posicion", "posición", "avg_position", "average_position"])
-    query_col = find_col(df, ["query", "queries", "consulta", "consultas", "keyword", "keywords"])
-    page_col = find_col(df, ["page", "pages", "pagina", "página", "landing_page"])
-
-    clicks = to_numeric(df[clicks_col]).sum() if clicks_col else 0
-    impressions = to_numeric(df[impressions_col]).sum() if impressions_col else 0
-    ctr = (clicks / impressions * 100) if impressions else (to_numeric(df[ctr_col]).mean() if ctr_col else 0)
-    avg_pos = to_numeric(df[pos_col]).replace(0, np.nan).mean() if pos_col else 0
-    queries = df[query_col].nunique() if query_col else len(df)
-    pages = df[page_col].nunique() if page_col else 0
-
-    opportunities = pd.DataFrame()
-    if impressions_col and pos_col:
-        tmp = df.copy()
-        tmp["impressions_num"] = to_numeric(tmp[impressions_col])
-        tmp["position_num"] = to_numeric(tmp[pos_col])
-        tmp["clicks_num"] = to_numeric(tmp[clicks_col]) if clicks_col else 0
-        tmp["ctr_num"] = to_numeric(tmp[ctr_col]) if ctr_col else np.where(tmp["impressions_num"] > 0, tmp["clicks_num"] / tmp["impressions_num"] * 100, 0)
-        tmp["opportunity_type"] = np.select(
-            [
-                (tmp["position_num"].between(4, 12)) & (tmp["impressions_num"] >= tmp["impressions_num"].quantile(0.60)),
-                (tmp["position_num"].between(13, 30)) & (tmp["impressions_num"] >= tmp["impressions_num"].quantile(0.60)),
-                (tmp["position_num"] <= 10) & (tmp["ctr_num"] < 1.0) & (tmp["impressions_num"] > 100),
-            ],
-            [
-                "Near page-one lift: refresh content and improve internal links",
-                "Content gap: expand topical coverage",
-                "CTR gap: improve title/meta and snippet promise",
-            ],
-            default="Monitor",
-        )
-        visible_cols = [c for c in [query_col, page_col, clicks_col, impressions_col, ctr_col, pos_col, "opportunity_type"] if c]
-        opportunities = tmp.sort_values(["impressions_num", "position_num"], ascending=[False, True])[visible_cols].head(30)
-
-    return {"clicks": clicks, "impressions": impressions, "ctr": ctr, "avg_position": avg_pos, "queries": queries, "pages": pages, "opportunities": opportunities}
-
-
-def ga4_metrics(df):
-    if df is None or df.empty:
-        return None
-    sessions_col = find_col(df, ["sessions", "sesiones"])
-    users_col = find_col(df, ["users", "active_users", "usuarios", "total_users"])
-    conversions_col = find_col(df, ["conversions", "key_events", "conversiones", "event_count"])
-    channel_col = find_col(df, ["session_default_channel_group", "default_channel_group", "channel", "canal"])
-    source_col = find_col(df, ["source", "medium", "source_medium", "session_source_medium"])
-    page_col = find_col(df, ["landing_page", "page_path", "page", "pagina", "página"])
-
-    sessions = to_numeric(df[sessions_col]).sum() if sessions_col else 0
-    users = to_numeric(df[users_col]).sum() if users_col else 0
-    conversions = to_numeric(df[conversions_col]).sum() if conversions_col else 0
-    cvr = conversions / sessions * 100 if sessions else 0
-    top = pd.DataFrame()
-    group_col = page_col or channel_col or source_col
-    if group_col and sessions_col:
-        agg = {sessions_col: "sum"}
-        if conversions_col:
-            agg[conversions_col] = "sum"
-        top = df.groupby(group_col, dropna=False).agg(agg).reset_index().sort_values(sessions_col, ascending=False).head(20)
-    return {"sessions": sessions, "users": users, "conversions": conversions, "cvr": cvr, "top": top}
-
-
-def yt_metrics(df):
-    if df is None or df.empty:
-        return None
-    views_col = find_col(df, ["views", "vistas", "visualizaciones"])
-    watch_col = find_col(df, ["watch_time", "watch_time_hours", "tiempo_de_reproducción", "tiempo_de_visualización"])
-    impressions_col = find_col(df, ["impressions", "impresiones"])
-    ctr_col = find_col(df, ["impressions_ctr", "ctr"])
-    title_col = find_col(df, ["video_title", "title", "titulo", "título", "content"])
-    views = to_numeric(df[views_col]).sum() if views_col else 0
-    watch = to_numeric(df[watch_col]).sum() if watch_col else 0
-    impressions = to_numeric(df[impressions_col]).sum() if impressions_col else 0
-    ctr = to_numeric(df[ctr_col]).mean() if ctr_col else 0
-    top = df.sort_values(views_col, ascending=False).head(15) if title_col and views_col else pd.DataFrame()
-    return {"views": views, "watch_time": watch, "impressions": impressions, "ctr": ctr, "top": top}
-
-
-def email_metrics(df):
-    if df is None or df.empty:
-        return None
-    sent_col = find_col(df, ["sent", "recipients", "envios", "enviados", "delivered"])
-    delivered_col = find_col(df, ["delivered", "entregados"])
-    opens_col = find_col(df, ["opens", "unique_opens", "open", "aperturas"])
-    clicks_col = find_col(df, ["clicks", "unique_clicks", "clics"])
-    unsub_col = find_col(df, ["unsubscribed", "unsubscribes", "bajas"])
-    campaign_col = find_col(df, ["campaign", "campaign_name", "subject", "email", "name", "campaña"])
-
-    sent = to_numeric(df[sent_col]).sum() if sent_col else 0
-    delivered = to_numeric(df[delivered_col]).sum() if delivered_col else sent
-    opens = to_numeric(df[opens_col]).sum() if opens_col else 0
-    clicks = to_numeric(df[clicks_col]).sum() if clicks_col else 0
-    unsub = to_numeric(df[unsub_col]).sum() if unsub_col else 0
-    open_rate = opens / delivered * 100 if delivered else 0
-    click_rate = clicks / delivered * 100 if delivered else 0
-    click_to_open = clicks / opens * 100 if opens else 0
-    unsub_rate = unsub / delivered * 100 if delivered else 0
-    top = pd.DataFrame()
-    if campaign_col:
-        cols = [c for c in [campaign_col, sent_col, delivered_col, opens_col, clicks_col, unsub_col] if c]
-        top = df[cols].head(20)
-    return {"sent": sent, "delivered": delivered, "opens": opens, "clicks": clicks, "open_rate": open_rate, "click_rate": click_rate, "click_to_open": click_to_open, "unsub_rate": unsub_rate, "top": top}
-
-
-
-def ahrefs_metrics(df):
-    """Reads common Ahrefs CSV exports: Site Explorer overview, backlinks, referring domains, pages, organic keywords.
-
-    The parser is defensive because Ahrefs exports vary by report. It looks for common
-    columns and, when possible, estimates authority/offsite signals from the data.
-    """
-    if df is None or df.empty:
-        return None
-
-    # Handle simple key/value exports if present.
-    cols = list(df.columns)
-    key_col = find_col(df, ["metric", "name", "item", "label", "parameter"])
-    val_col = find_col(df, ["value", "valor", "count", "total"])
-    kv = {}
-    if key_col and val_col:
-        for _, row in df[[key_col, val_col]].dropna().iterrows():
-            key = str(row[key_col]).strip().lower().replace(" ", "_").replace("-", "_")
-            try:
-                val = float(str(row[val_col]).replace(",", ""))
-                kv[key] = val
-            except Exception:
-                pass
-
-    dr_col = find_col(df, ["domain_rating", "dr"])
-    ur_col = find_col(df, ["url_rating", "ur"])
-    rd_col = find_col(df, ["referring_domains", "ref_domains", "domains", "domain"] )
-    backlinks_col = find_col(df, ["backlinks", "backlink", "links", "external_links"])
-    dofollow_col = find_col(df, ["dofollow", "do_follow", "follow"] )
-    traffic_col = find_col(df, ["organic_traffic", "traffic", "trafico", "tráfico"] )
-    anchor_col = find_col(df, ["anchor", "anchor_text"] )
-    target_col = find_col(df, ["target_url", "target", "url", "page", "referring_page_url"] )
-
-    def kv_find(names, default=0):
-        for name in names:
-            n = name.lower().replace(" ", "_").replace("-", "_")
-            for k, v in kv.items():
-                if n in k or k in n:
-                    return v
-        return default
-
-    dr = to_numeric(df[dr_col]).max() if dr_col else kv_find(["domain_rating", "dr"], 0)
-    ur = to_numeric(df[ur_col]).mean() if ur_col else kv_find(["url_rating", "ur"], 0)
-    referring_domains = int(to_numeric(df[rd_col]).sum()) if rd_col and rd_col != target_col else int(kv_find(["referring_domains", "ref_domains"], 0))
-    if referring_domains == 0 and rd_col and rd_col == "domain":
-        referring_domains = int(df[rd_col].nunique())
-    backlinks = int(to_numeric(df[backlinks_col]).sum()) if backlinks_col else int(kv_find(["backlinks"], len(df)))
-    if backlinks == 0 and len(df) > 0:
-        backlinks = len(df)
-    organic_traffic = to_numeric(df[traffic_col]).sum() if traffic_col else kv_find(["organic_traffic", "traffic"], 0)
-
-    dofollow_share = 0
-    if dofollow_col:
-        vals = df[dofollow_col].astype(str).str.lower()
-        dofollow_share = (vals.str.contains("true|yes|dofollow|follow", regex=True).mean() * 100) if len(vals) else 0
-
-    top = pd.DataFrame()
-    if target_col:
-        visible = [c for c in [target_col, anchor_col, backlinks_col, rd_col, traffic_col, dr_col, ur_col] if c]
-        top = df[visible].head(25)
-
-    authority_signal = clamp((dr * 1.2) + np.log1p(max(referring_domains, 0)) * 8 + np.log1p(max(backlinks, 0)) * 3 + dofollow_share * 0.10)
-
-    return {
-        "domain_rating": float(dr or 0),
-        "url_rating": float(ur or 0),
-        "referring_domains": int(referring_domains or 0),
-        "backlinks": int(backlinks or 0),
-        "dofollow_share": float(dofollow_share or 0),
-        "organic_traffic": float(organic_traffic or 0),
-        "authority_signal": authority_signal,
-        "top": top,
-    }
-
-def calculate_content_effect(content_inputs):
-    """Estimates ranking movement and visibility lift from content-specific changes."""
-    score = 0
-    score += content_inputs["pages_refreshed"] * 1.6
-    score += content_inputs["new_pages"] * 2.4
-    score += content_inputs["faq_blocks"] * 1.1
-    score += content_inputs["case_studies_added"] * 2.0
-    score += content_inputs["internal_links_added"] * 0.22
-    score += content_inputs["content_quality_delta"] * 0.55
-    score += content_inputs["topical_coverage_delta"] * 0.65
-    score += content_inputs["eeat_proof_delta"] * 0.50
-    score *= content_inputs["implementation_quality"] / 100
-
-    estimated_position_gain = min(8.0, score / 10)
-    ctr_lift = min(35.0, content_inputs["title_meta_improvement"] * 0.45)
-    snippet_aeo_lift = min(45.0, (content_inputs["faq_blocks"] * 2.2 + content_inputs["structured_answer_delta"] * 0.55))
-    content_visibility_lift = min(90.0, score * 0.75 + ctr_lift * 0.35 + snippet_aeo_lift * 0.25)
-
-    return {
-        "content_action_score": clamp(score),
-        "estimated_position_gain": estimated_position_gain,
-        "ctr_lift_pct": ctr_lift,
-        "snippet_aeo_lift_pct": snippet_aeo_lift,
-        "content_visibility_lift_pct": content_visibility_lift,
-    }
-
-
-def calculate_email_effect(email_inputs, email_data):
-    list_size = email_inputs["list_size"]
-    open_rate = email_data["open_rate"] if email_data and email_data["open_rate"] > 0 else email_inputs["open_rate"]
-    click_rate = email_data["click_rate"] if email_data and email_data["click_rate"] > 0 else email_inputs["click_rate"]
-
-    projected_open_rate = min(80, open_rate + email_inputs["subject_line_lift"] + email_inputs["segmentation_lift"] * 0.45)
-    projected_click_rate = min(30, click_rate + email_inputs["cta_lift"] + email_inputs["content_relevance_lift"] * 0.35 + email_inputs["segmentation_lift"] * 0.25)
-    sends = list_size * email_inputs["campaigns_per_month"]
-    current_clicks = sends * click_rate / 100
-    projected_clicks = sends * projected_click_rate / 100
-    assisted_organic_lift = min(18, (projected_clicks - current_clicks) / max(sends, 1) * 100 * 1.8 + email_inputs["newsletter_to_content"] * 0.25)
-
-    return {
-        "current_open_rate": open_rate,
-        "projected_open_rate": projected_open_rate,
-        "current_click_rate": click_rate,
-        "projected_click_rate": projected_click_rate,
-        "current_email_clicks": current_clicks,
-        "projected_email_clicks": projected_clicks,
-        "incremental_email_clicks": projected_clicks - current_clicks,
-        "assisted_organic_lift_pct": assisted_organic_lift,
-    }
-
-
-def calculate_scores(inputs, actions, data_signal, content_effect, email_effect):
-    technical = (
-        inputs["unique_titles"] * 0.18 + inputs["unique_meta"] * 0.14 + inputs["clean_h_structure"] * 0.14 +
-        inputs["mobile_speed"] * 0.18 + inputs["indexability"] * 0.18 + inputs["internal_linking"] * 0.18
-    )
-    content = (
-        inputs["service_page_quality"] * 0.22 + inputs["pillar_pages"] * 0.20 + inputs["case_studies"] * 0.16 +
-        inputs["content_depth"] * 0.18 + inputs["freshness"] * 0.12 + data_signal["search_demand_score"] * 0.12
-    )
-    authority = (
-        min(inputs["domain_rating"] * 1.6, 100) * 0.32 + min(inputs["ref_domains"] / 2, 100) * 0.30 +
-        inputs["brand_mentions"] * 0.14 + inputs["linkedin_visibility"] * 0.12 + data_signal["offsite_signal"] * 0.12
-    )
-    aeo = (
-        inputs["schema"] * 0.20 + inputs["faq_direct_answers"] * 0.20 + inputs["entity_clarity"] * 0.17 +
-        inputs["service_specificity"] * 0.16 + inputs["proof_signals"] * 0.17 + data_signal["query_intent_score"] * 0.10
-    )
-
-    action_bonus = {
-        "Fix duplicated titles and meta descriptions": {"technical": 8, "content": 2, "aeo": 2, "authority": 0, "biz": 0.02},
-        "Add schema markup": {"technical": 3, "content": 0, "aeo": 12, "authority": 0, "biz": 0.01},
-        "Add FAQs and direct answers": {"technical": 1, "content": 5, "aeo": 14, "authority": 0, "biz": 0.03},
-        "Create or improve pillar pages": {"technical": 1, "content": 14, "aeo": 8, "authority": 3, "biz": 0.05},
-        "Improve internal linking": {"technical": 10, "content": 5, "aeo": 4, "authority": 2, "biz": 0.02},
-        "Improve mobile speed/Core Web Vitals": {"technical": 12, "content": 0, "aeo": 1, "authority": 0, "biz": 0.01},
-        "Publish case studies with proof": {"technical": 0, "content": 8, "aeo": 7, "authority": 5, "biz": 0.04},
-        "Earn high-quality backlinks/mentions": {"technical": 0, "content": 2, "aeo": 2, "authority": 16, "biz": 0.03},
-        "Clarify positioning and entities": {"technical": 0, "content": 6, "aeo": 11, "authority": 4, "biz": 0.03},
-        "Reddit / community listening and answer mining": {"technical": 0, "content": 8, "aeo": 9, "authority": 4, "biz": 0.04},
-        "YouTube content repurposing into SEO pages": {"technical": 0, "content": 9, "aeo": 6, "authority": 3, "biz": 0.03},
-        "LinkedIn executive thought leadership": {"technical": 0, "content": 4, "aeo": 5, "authority": 8, "biz": 0.04},
-        "Email nurturing to SEO content hubs": {"technical": 0, "content": 4, "aeo": 2, "authority": 3, "biz": 0.03},
-    }
-    bonuses = {"technical": 0, "content": 0, "aeo": 0, "authority": 0, "biz": 0}
-    for action in actions:
-        for key, value in action_bonus[action].items():
-            bonuses[key] += value
-
-    bonuses["content"] += content_effect["content_action_score"] * 0.25
-    bonuses["aeo"] += content_effect["snippet_aeo_lift_pct"] * 0.16
-    bonuses["authority"] += min(8, email_effect["assisted_organic_lift_pct"] * 0.2)
-    bonuses["biz"] += content_effect["content_visibility_lift_pct"] / 1000 + email_effect["assisted_organic_lift_pct"] / 1000
-
-    current = {
-        "Technical SEO": clamp(technical),
-        "Content Quality": clamp(content),
-        "Authority": clamp(authority),
-        "AEO/GEO Readiness": clamp(aeo),
-    }
-    projected = {
-        "Technical SEO": clamp(technical + bonuses["technical"]),
-        "Content Quality": clamp(content + bonuses["content"]),
-        "Authority": clamp(authority + bonuses["authority"]),
-        "AEO/GEO Readiness": clamp(aeo + bonuses["aeo"]),
-    }
-    current_seo = current["Technical SEO"] * 0.34 + current["Content Quality"] * 0.33 + current["Authority"] * 0.33
-    projected_seo = projected["Technical SEO"] * 0.34 + projected["Content Quality"] * 0.33 + projected["Authority"] * 0.33
-    current_aeo = current["AEO/GEO Readiness"] * 0.55 + current["Content Quality"] * 0.25 + current["Authority"] * 0.20
-    projected_aeo = projected["AEO/GEO Readiness"] * 0.55 + projected["Content Quality"] * 0.25 + projected["Authority"] * 0.20
-    return current, projected, clamp(current_seo), clamp(projected_seo), clamp(current_aeo), clamp(projected_aeo), bonuses["biz"]
-
-
-def calculate_business_impact(current_seo, projected_seo, current_aeo, projected_aeo, biz, action_biz_bonus, content_effect, email_effect):
-    seo_lift = max(projected_seo - current_seo, 0)
-    aeo_lift = max(projected_aeo - current_aeo, 0)
-    visibility_lift_pct = ((seo_lift * biz["seo_weight"] + aeo_lift * biz["aeo_weight"]) / 100) + action_biz_bonus
-    visibility_lift_pct += content_effect["content_visibility_lift_pct"] / 100
-    visibility_lift_pct += email_effect["assisted_organic_lift_pct"] / 100
-    visibility_lift_pct *= biz["execution_confidence"] / 100
-
-    current_sessions = biz["monthly_sessions"]
-    projected_sessions = current_sessions * (1 + visibility_lift_pct)
-    current_leads = current_sessions * (biz["visit_to_lead"] / 100)
-    projected_leads = projected_sessions * (biz["visit_to_lead"] / 100)
-    current_opps = current_leads * (biz["lead_to_opp"] / 100)
-    projected_opps = projected_leads * (biz["lead_to_opp"] / 100)
-    current_clients = current_opps * (biz["opp_to_client"] / 100)
-    projected_clients = projected_opps * (biz["opp_to_client"] / 100)
-    current_revenue = current_clients * biz["avg_deal_value"]
-    projected_revenue = projected_clients * biz["avg_deal_value"]
-
-    email_leads = email_effect["incremental_email_clicks"] * (biz["visit_to_lead"] / 100)
-    email_opps = email_leads * (biz["lead_to_opp"] / 100)
-    email_clients = email_opps * (biz["opp_to_client"] / 100)
-    email_revenue = email_clients * biz["avg_deal_value"]
-
-    return {
-        "Visibility lift %": visibility_lift_pct * 100,
-        "Monthly sessions": projected_sessions,
-        "Monthly leads": projected_leads,
-        "Monthly opportunities": projected_opps,
-        "Monthly clients": projected_clients,
-        "Monthly revenue": projected_revenue,
-        "Incremental sessions": projected_sessions - current_sessions,
-        "Incremental leads": projected_leads - current_leads,
-        "Incremental opportunities": projected_opps - current_opps,
-        "Incremental clients": projected_clients - current_clients,
-        "Incremental revenue": projected_revenue - current_revenue,
-        "Current revenue": current_revenue,
-        "Email incremental revenue": email_revenue,
-    }
-
-# -----------------------------
-# Data upload section
-# -----------------------------
-with st.expander("1. Cargar datos reales opcional", expanded=True):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        gsc_file = st.file_uploader("Google Search Console CSV", type=["csv"], key="gsc")
-    with c2:
-        ga4_file = st.file_uploader("GA4 CSV", type=["csv"], key="ga4")
-    with c3:
-        yt_file = st.file_uploader("YouTube Analytics CSV", type=["csv"], key="yt")
-    with c4:
-        email_file = st.file_uploader("Email marketing CSV", type=["csv"], key="email")
-    with c5:
-        ahrefs_file = st.file_uploader("Ahrefs CSV", type=["csv"], key="ahrefs")
-    st.caption("Email CSV puede venir de Mailchimp, HubSpot, Brevo, ActiveCampaign, etc. Ahrefs puede venir de Site Explorer Overview, Backlinks, Referring Domains, Top Pages u Organic Keywords.")
-
-
-gsc = gsc_metrics(read_uploaded_csv(gsc_file))
-ga4 = ga4_metrics(read_uploaded_csv(ga4_file))
-yt = yt_metrics(read_uploaded_csv(yt_file))
-email = email_metrics(read_uploaded_csv(email_file))
-ahrefs = ahrefs_metrics(read_uploaded_csv(ahrefs_file))
-
-search_demand_score = 35
-query_intent_score = 35
-offsite_signal = 30
-monthly_sessions_default = 500
-visit_to_lead_default = 1.5
-email_list_default = 5000
-email_open_default = 30.0
-email_click_default = 1.5
-
-if gsc:
-    search_demand_score = clamp(np.log1p(gsc["impressions"]) * 8)
-    query_intent_score = clamp((100 - min(gsc["avg_position"] or 50, 50) * 2) * 0.4 + min(gsc["queries"], 100) * 0.6)
-if ga4:
-    monthly_sessions_default = int(max(ga4["sessions"], 1))
-    if ga4["cvr"] > 0:
-        visit_to_lead_default = round(float(ga4["cvr"]), 2)
-if yt:
-    offsite_signal = clamp(np.log1p(yt["views"]) * 8 + np.log1p(yt["watch_time"] + 1) * 3)
-if email:
-    email_list_default = int(max(email["delivered"], 1))
-    email_open_default = float(round(email["open_rate"], 2))
-    email_click_default = float(round(email["click_rate"], 2))
-if ahrefs:
-    if ahrefs["authority_signal"] > offsite_signal:
-        offsite_signal = ahrefs["authority_signal"]
-
-data_signal = {"search_demand_score": search_demand_score, "query_intent_score": query_intent_score, "offsite_signal": offsite_signal}
-
-if any([gsc, ga4, yt, email, ahrefs]):
-    st.subheader("Resumen de datos cargados")
-    cards = st.columns(10)
-    if gsc:
-        cards[0].metric("GSC clicks", f"{gsc['clicks']:,.0f}")
-        cards[1].metric("GSC impressions", f"{gsc['impressions']:,.0f}")
-        cards[2].metric("Avg position", f"{gsc['avg_position']:.1f}")
-    if ga4:
-        cards[3].metric("GA4 sessions", f"{ga4['sessions']:,.0f}")
-        cards[4].metric("GA4 CVR", f"{ga4['cvr']:.2f}%")
-    if yt:
-        cards[5].metric("YT views", f"{yt['views']:,.0f}")
-    if email:
-        cards[6].metric("Email open rate", f"{email['open_rate']:.1f}%")
-        cards[7].metric("Email click rate", f"{email['click_rate']:.1f}%")
-    if ahrefs:
-        cards[8].metric("Ahrefs DR", f"{ahrefs['domain_rating']:.0f}")
-        cards[9].metric("Ref domains", f"{ahrefs['referring_domains']:,.0f}")
+def score_from_inverse(value, target_bad):
+    return clamp(100 - (safe_div(value, target_bad) * 100))
 
 # -----------------------------
 # Sidebar inputs
 # -----------------------------
-st.sidebar.header("Website inputs")
-st.sidebar.caption("Puedes cargar datos reales o ajustar manualmente de 0 a 100.")
-dr_default = int(ahrefs["domain_rating"]) if ahrefs and ahrefs["domain_rating"] > 0 else 19
-rd_default = int(ahrefs["referring_domains"]) if ahrefs and ahrefs["referring_domains"] > 0 else 127
-inputs = {
-    "domain_rating": st.sidebar.number_input("Domain Rating", 0, 100, dr_default),
-    "ref_domains": st.sidebar.number_input("Referring domains", 0, 1000000, rd_default),
-    "unique_titles": st.sidebar.slider("Unique titles", 0, 100, 35),
-    "unique_meta": st.sidebar.slider("Unique meta descriptions", 0, 100, 35),
-    "clean_h_structure": st.sidebar.slider("Clean H1/H2 structure", 0, 100, 45),
-    "mobile_speed": st.sidebar.slider("Mobile speed/Core Web Vitals", 0, 100, 55),
-    "indexability": st.sidebar.slider("Indexability/canonicals/sitemap", 0, 100, 70),
-    "internal_linking": st.sidebar.slider("Internal linking", 0, 100, 45),
-    "service_page_quality": st.sidebar.slider("Service page quality", 0, 100, 50),
-    "pillar_pages": st.sidebar.slider("Pillar pages", 0, 100, 35),
-    "case_studies": st.sidebar.slider("Case studies/proof pages", 0, 100, 55),
-    "content_depth": st.sidebar.slider("Content depth", 0, 100, 50),
-    "freshness": st.sidebar.slider("Content freshness", 0, 100, 45),
-    "schema": st.sidebar.slider("Schema markup", 0, 100, 20),
-    "faq_direct_answers": st.sidebar.slider("FAQs/direct answers", 0, 100, 25),
-    "entity_clarity": st.sidebar.slider("Entity clarity", 0, 100, 35),
-    "service_specificity": st.sidebar.slider("Service specificity", 0, 100, 45),
-    "proof_signals": st.sidebar.slider("Proof signals for AI answers", 0, 100, 40),
-    "brand_mentions": st.sidebar.slider("Brand mentions", 0, 100, 30),
-    "linkedin_visibility": st.sidebar.slider("LinkedIn/executive visibility", 0, 100, 45),
-}
 
-st.sidebar.header("Business inputs")
-biz = {
-    "monthly_sessions": st.sidebar.number_input("Current monthly organic sessions", 0, 1000000, monthly_sessions_default),
-    "visit_to_lead": st.sidebar.number_input("Visit to lead conversion %", 0.0, 100.0, float(visit_to_lead_default), step=0.1),
-    "lead_to_opp": st.sidebar.number_input("Lead to opportunity conversion %", 0.0, 100.0, 25.0, step=1.0),
-    "opp_to_client": st.sidebar.number_input("Opportunity to client conversion %", 0.0, 100.0, 20.0, step=1.0),
-    "avg_deal_value": st.sidebar.number_input("Average deal value / client", 0, 10000000, 15000, step=500),
-    "execution_confidence": st.sidebar.slider("Execution confidence", 0, 100, 65),
-    "seo_weight": st.sidebar.slider("SEO impact weight", 0.0, 3.0, 1.0, step=0.1),
-    "aeo_weight": st.sidebar.slider("AEO/GEO impact weight", 0.0, 3.0, 0.8, step=0.1),
-}
+st.sidebar.title("Data Hub")
+st.sidebar.caption(APP_VERSION)
+
+website_url = st.sidebar.text_input("Website URL", value="https://www.scalto.com")
+company_name = st.sidebar.text_input("Company / Brand", value="Scalto")
+industry = st.sidebar.selectbox("Industry", ["B2B Services", "Fintech", "Wealth Management", "SaaS", "Professional Services", "Other"])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Upload CSVs")
+gsc_file = st.sidebar.file_uploader("Google Search Console CSV", type=["csv"], key="gsc")
+ga4_file = st.sidebar.file_uploader("Google Analytics 4 CSV", type=["csv"], key="ga4")
+linkedin_file = st.sidebar.file_uploader("LinkedIn Analytics CSV", type=["csv"], key="linkedin")
+social_file = st.sidebar.file_uploader("Social Media CSV", type=["csv"], key="social")
+email_file = st.sidebar.file_uploader("Email Marketing CSV", type=["csv"], key="email")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Authority Data")
+st.sidebar.caption("Use manual values if you cannot export Ahrefs / SEMrush.")
+domain_rating = st.sidebar.number_input("Domain Rating / Authority Score", min_value=0, max_value=100, value=22)
+referring_domains = st.sidebar.number_input("Referring Domains", min_value=0, value=127)
+backlinks = st.sidebar.number_input("Backlinks", min_value=0, value=549)
+organic_keywords_manual = st.sidebar.number_input("Organic Keywords", min_value=0, value=4)
+organic_traffic_manual = st.sidebar.number_input("Monthly Organic Traffic", min_value=0, value=36)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Business Model")
+visitor_to_lead = st.sidebar.slider("Visitor to Lead Rate", 0.0, 20.0, 1.5, 0.1) / 100
+lead_to_opp = st.sidebar.slider("Lead to Opportunity Rate", 0.0, 100.0, 25.0, 1.0) / 100
+opp_to_client = st.sidebar.slider("Opportunity to Client Rate", 0.0, 100.0, 20.0, 1.0) / 100
+avg_deal_value = st.sidebar.number_input("Average Deal Value / LTV", min_value=0, value=18000, step=500)
 
 # -----------------------------
-# Content and email scenarios
+# Manual audit tabs inputs
 # -----------------------------
-st.subheader("2. Simular cambios de contenido y email")
-content_tab, email_tab = st.tabs(["Contenido y ranking", "Email y nurturing"])
 
-with content_tab:
-    cc1, cc2, cc3, cc4 = st.columns(4)
-    content_inputs = {
-        "pages_refreshed": cc1.number_input("Páginas existentes a actualizar", 0, 500, 5),
-        "new_pages": cc2.number_input("Nuevas páginas/artículos", 0, 500, 3),
-        "faq_blocks": cc3.number_input("Bloques FAQ/direct answers", 0, 500, 8),
-        "case_studies_added": cc4.number_input("Casos/testimonios nuevos", 0, 200, 2),
-        "internal_links_added": cc1.number_input("Links internos agregados", 0, 5000, 30),
-        "title_meta_improvement": cc2.slider("Mejora de titles/metas", 0, 100, 35),
-        "content_quality_delta": cc3.slider("Mejora de calidad del contenido", 0, 100, 35),
-        "topical_coverage_delta": cc4.slider("Mejora de cobertura temática", 0, 100, 30),
-        "eeat_proof_delta": cc1.slider("Mejora de pruebas/E-E-A-T", 0, 100, 30),
-        "structured_answer_delta": cc2.slider("Mejora de respuestas estructuradas", 0, 100, 35),
-        "implementation_quality": cc3.slider("Calidad de implementación", 0, 100, 70),
-    }
+st.title("Trust & Visibility Intelligence Platform")
+st.caption("A strategic simulator for SEO, AEO/GEO, trust signals, social visibility, email impact, and 7-day action planning. No OpenAI API required.")
 
-with email_tab:
-    ec1, ec2, ec3, ec4 = st.columns(4)
-    email_inputs = {
-        "list_size": ec1.number_input("Tamaño de lista", 0, 10000000, email_list_default),
-        "campaigns_per_month": ec2.number_input("Campañas por mes", 0, 100, 2),
-        "open_rate": ec3.number_input("Open rate actual %", 0.0, 100.0, email_open_default, step=0.1),
-        "click_rate": ec4.number_input("Click rate actual %", 0.0, 100.0, email_click_default, step=0.1),
-        "subject_line_lift": ec1.slider("Mejora por asuntos/preheaders", 0.0, 20.0, 3.0, step=0.5),
-        "cta_lift": ec2.slider("Mejora por CTAs/oferta", 0.0, 10.0, 1.0, step=0.1),
-        "segmentation_lift": ec3.slider("Mejora por segmentación", 0.0, 20.0, 4.0, step=0.5),
-        "content_relevance_lift": ec4.slider("Mejora por relevancia del contenido", 0.0, 20.0, 4.0, step=0.5),
-        "newsletter_to_content": ec1.slider("Uso de email para empujar hubs SEO", 0, 100, 40),
-    }
+with st.expander("How to use this app", expanded=False):
+    st.write("""
+    1. Upload whatever data you have. The app works even if you only enter manual values.
+    2. Use the checkboxes and counts to describe the current website and brand presence.
+    3. Review the Trust Score, Visibility Score, and Opportunity Engine.
+    4. Use the 7-Day Sprint as a practical execution plan.
 
-content_effect = calculate_content_effect(content_inputs)
-email_effect = calculate_email_effect(email_inputs, email)
+    Important: this is a strategic projection model, not a guarantee of ranking or revenue. Use it to compare scenarios and prioritize work.
+    """)
 
-mc1, mc2, mc3, mc4 = st.columns(4)
-mc1.metric("Ranking gain estimado", f"+{content_effect['estimated_position_gain']:.1f} posiciones")
-mc2.metric("CTR lift estimado", f"+{content_effect['ctr_lift_pct']:.1f}%")
-mc3.metric("Email clicks incrementales", f"{email_effect['incremental_email_clicks']:,.0f}")
-mc4.metric("Lift asistido email", f"+{email_effect['assisted_organic_lift_pct']:.1f}%")
+# Load data
+with st.spinner("Reading uploaded files..."):
+    gsc = read_any_csv(gsc_file)
+    ga4 = read_any_csv(ga4_file)
+    linkedin = read_any_csv(linkedin_file)
+    social = read_any_csv(social_file)
+    email = read_any_csv(email_file)
+
+# Extract metrics
+metrics = {}
+
+if gsc is not None:
+    clicks_col = find_col(gsc, ["clicks"])
+    impressions_col = find_col(gsc, ["impressions"])
+    ctr_col = find_col(gsc, ["ctr"])
+    position_col = find_col(gsc, ["position", "average_position"])
+    query_col = find_col(gsc, ["query", "queries"])
+    page_col = find_col(gsc, ["page", "landing_page"])
+    metrics["gsc_clicks"] = to_num(gsc[clicks_col]).sum() if clicks_col else 0
+    metrics["gsc_impressions"] = to_num(gsc[impressions_col]).sum() if impressions_col else 0
+    metrics["gsc_ctr"] = safe_div(metrics["gsc_clicks"], metrics["gsc_impressions"]) * 100
+    metrics["gsc_avg_position"] = to_num(gsc[position_col]).replace(0, np.nan).mean() if position_col else 0
+    metrics["gsc_queries"] = gsc[query_col].nunique() if query_col else len(gsc)
+    metrics["gsc_pages"] = gsc[page_col].nunique() if page_col else 0
+else:
+    metrics.update({"gsc_clicks": 0, "gsc_impressions": 0, "gsc_ctr": 0, "gsc_avg_position": 0, "gsc_queries": organic_keywords_manual, "gsc_pages": 0})
+
+if ga4 is not None:
+    sessions_col = find_col(ga4, ["sessions", "engaged_sessions"])
+    users_col = find_col(ga4, ["users", "active_users", "total_users"])
+    conversions_col = find_col(ga4, ["conversions", "key_events", "events"])
+    metrics["ga4_sessions"] = to_num(ga4[sessions_col]).sum() if sessions_col else organic_traffic_manual
+    metrics["ga4_users"] = to_num(ga4[users_col]).sum() if users_col else 0
+    metrics["ga4_conversions"] = to_num(ga4[conversions_col]).sum() if conversions_col else 0
+else:
+    metrics.update({"ga4_sessions": organic_traffic_manual, "ga4_users": 0, "ga4_conversions": 0})
+
+if linkedin is not None:
+    li_impressions = find_col(linkedin, ["impressions", "views"])
+    li_clicks = find_col(linkedin, ["clicks", "link_clicks"])
+    li_eng = find_col(linkedin, ["engagements", "reactions", "likes"])
+    metrics["linkedin_impressions"] = to_num(linkedin[li_impressions]).sum() if li_impressions else 0
+    metrics["linkedin_clicks"] = to_num(linkedin[li_clicks]).sum() if li_clicks else 0
+    metrics["linkedin_engagements"] = to_num(linkedin[li_eng]).sum() if li_eng else 0
+else:
+    metrics.update({"linkedin_impressions": 0, "linkedin_clicks": 0, "linkedin_engagements": 0})
+
+if social is not None:
+    s_impressions = find_col(social, ["impressions", "reach", "views"])
+    s_clicks = find_col(social, ["clicks", "link_clicks"])
+    s_eng = find_col(social, ["engagements", "likes", "comments", "shares"])
+    metrics["social_impressions"] = to_num(social[s_impressions]).sum() if s_impressions else 0
+    metrics["social_clicks"] = to_num(social[s_clicks]).sum() if s_clicks else 0
+    metrics["social_engagements"] = to_num(social[s_eng]).sum() if s_eng else 0
+else:
+    metrics.update({"social_impressions": 0, "social_clicks": 0, "social_engagements": 0})
+
+if email is not None:
+    sent_col = find_col(email, ["sent", "recipients", "delivered"])
+    open_col = find_col(email, ["opens", "open_rate", "opened"])
+    click_col = find_col(email, ["clicks", "click_rate", "clicked"])
+    metrics["email_sent"] = to_num(email[sent_col]).sum() if sent_col else 0
+    metrics["email_opens"] = to_num(email[open_col]).sum() if open_col and "rate" not in open_col else 0
+    metrics["email_clicks"] = to_num(email[click_col]).sum() if click_col and "rate" not in click_col else 0
+else:
+    metrics.update({"email_sent": 0, "email_opens": 0, "email_clicks": 0})
+
+# Main input panel
+st.subheader("Current Website & Brand Signals")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("**Content Assets**")
+    service_pages = st.number_input("Service Pages", min_value=0, value=8)
+    blog_articles = st.number_input("Blog Articles", min_value=0, value=94)
+    case_studies = st.number_input("Case Studies", min_value=0, value=7)
+    videos = st.number_input("Videos", min_value=0, value=10)
+    faq_blocks = st.number_input("FAQ Blocks / Questions", min_value=0, value=22)
+
+with col2:
+    st.markdown("**Trust Signals**")
+    founders_visible = st.checkbox("Founders visible on website", value=True)
+    team_visible = st.checkbox("Team page / people visible", value=True)
+    author_bios = st.checkbox("Articles have author bios", value=False)
+    testimonials = st.checkbox("Testimonials visible", value=True)
+    client_logos = st.checkbox("Client logos visible", value=True)
+    credentials = st.checkbox("Credentials / certifications / awards", value=False)
+    clear_about = st.checkbox("Clear About page", value=True)
+
+with col3:
+    st.markdown("**AEO / GEO Readiness**")
+    faq_schema = st.checkbox("FAQ Schema", value=False)
+    org_schema = st.checkbox("Organization Schema", value=False)
+    article_schema = st.checkbox("Article Schema", value=False)
+    person_schema = st.checkbox("Person Schema", value=False)
+    breadcrumb_schema = st.checkbox("Breadcrumb Schema", value=False)
+    direct_answers = st.checkbox("Direct answers in content", value=True)
+    external_citations = st.checkbox("External citations / sources", value=False)
+    tables_lists = st.checkbox("Tables, lists, definitions", value=True)
+
+st.subheader("Scenario: Work Planned")
+sc1, sc2, sc3, sc4 = st.columns(4)
+with sc1:
+    pages_to_update = st.slider("Existing pages to update", 0, 50, 6)
+    new_pages = st.slider("New pages / pillars", 0, 30, 3)
+with sc2:
+    new_case_studies = st.slider("New case studies", 0, 10, 1)
+    new_faqs = st.slider("New FAQ blocks", 0, 50, 10)
+with sc3:
+    linkedin_posts = st.slider("LinkedIn posts this month", 0, 50, 8)
+    social_posts = st.slider("Other social posts this month", 0, 80, 12)
+with sc4:
+    newsletters = st.slider("Newsletters this month", 0, 20, 2)
+    community_actions = st.slider("Reddit/community actions", 0, 30, 5)
 
 # -----------------------------
-# Actions
+# Scores
 # -----------------------------
-actions_list = [
-    "Fix duplicated titles and meta descriptions",
-    "Add schema markup",
-    "Add FAQs and direct answers",
-    "Create or improve pillar pages",
-    "Improve internal linking",
-    "Improve mobile speed/Core Web Vitals",
-    "Publish case studies with proof",
-    "Earn high-quality backlinks/mentions",
-    "Clarify positioning and entities",
-    "Reddit / community listening and answer mining",
-    "YouTube content repurposing into SEO pages",
-    "LinkedIn executive thought leadership",
-    "Email nurturing to SEO content hubs",
-]
-selected_actions = st.multiselect(
-    "3. Selecciona las acciones estratégicas que quieres simular",
-    actions_list,
-    default=[
-        "Fix duplicated titles and meta descriptions",
-        "Add schema markup",
-        "Add FAQs and direct answers",
-        "Create or improve pillar pages",
-        "Email nurturing to SEO content hubs",
-    ],
+
+technical_score = np.mean([
+    70 if org_schema else 45,
+    80 if breadcrumb_schema else 50,
+    75 if direct_answers else 45,
+    70 if tables_lists else 50,
+])
+
+content_score = np.mean([
+    score_from_count(service_pages, 10),
+    score_from_count(blog_articles, 80),
+    score_from_count(case_studies, 8),
+    score_from_count(faq_blocks, 40),
+    score_from_count(videos, 20),
+])
+
+eeat_score = np.mean([
+    100 if founders_visible else 40,
+    100 if team_visible else 40,
+    100 if author_bios else 35,
+    100 if clear_about else 50,
+    100 if credentials else 45,
+])
+
+social_proof_score = np.mean([
+    score_from_count(case_studies, 8),
+    100 if testimonials else 35,
+    100 if client_logos else 35,
+    score_from_count(referring_domains, 250),
+])
+
+authority_score = np.mean([
+    domain_rating,
+    score_from_count(referring_domains, 300),
+    score_from_count(backlinks, 1000),
+    score_from_count(organic_keywords_manual + metrics.get("gsc_queries", 0), 500),
+])
+
+aeo_score = np.mean([
+    100 if faq_schema else 30,
+    100 if org_schema else 40,
+    100 if article_schema else 35,
+    100 if person_schema else 30,
+    100 if direct_answers else 40,
+    100 if external_citations else 45,
+    100 if tables_lists else 55,
+])
+
+social_presence_score = np.mean([
+    score_from_count(metrics.get("linkedin_impressions", 0), 50000),
+    score_from_count(metrics.get("linkedin_clicks", 0), 1000),
+    score_from_count(metrics.get("social_impressions", 0), 50000),
+    score_from_count(metrics.get("social_engagements", 0), 2500),
+    score_from_count(linkedin_posts + social_posts, 30),
+])
+
+email_score = np.mean([
+    score_from_count(metrics.get("email_sent", 0), 5000),
+    score_from_count(metrics.get("email_clicks", 0), 250),
+    score_from_count(newsletters, 4),
+])
+
+trust_score = (
+    eeat_score * 0.25
+    + social_proof_score * 0.20
+    + authority_score * 0.20
+    + content_score * 0.20
+    + aeo_score * 0.15
 )
 
-current, projected, current_seo, projected_seo, current_aeo, projected_aeo, action_biz_bonus = calculate_scores(inputs, selected_actions, data_signal, content_effect, email_effect)
-current_trust = clamp(
-    current["Content Quality"] * 0.24 + current["Authority"] * 0.22 + current["AEO/GEO Readiness"] * 0.18 +
-    inputs["proof_signals"] * 0.14 + inputs["case_studies"] * 0.10 + inputs["entity_clarity"] * 0.07 + inputs["linkedin_visibility"] * 0.05
+visibility_score = (
+    technical_score * 0.15
+    + content_score * 0.20
+    + authority_score * 0.20
+    + aeo_score * 0.20
+    + social_presence_score * 0.15
+    + email_score * 0.10
 )
-projected_trust = clamp(
-    projected["Content Quality"] * 0.24 + projected["Authority"] * 0.22 + projected["AEO/GEO Readiness"] * 0.18 +
-    clamp(inputs["proof_signals"] + content_inputs["eeat_proof_delta"] * 0.45) * 0.14 +
-    clamp(inputs["case_studies"] + content_inputs["case_studies_added"] * 3.0) * 0.10 +
-    clamp(inputs["entity_clarity"] + content_inputs["structured_answer_delta"] * 0.25) * 0.07 +
-    inputs["linkedin_visibility"] * 0.05
-)
-impact = calculate_business_impact(current_seo, projected_seo, current_aeo, projected_aeo, biz, action_biz_bonus, content_effect, email_effect)
+
+# Scenario lift
+seo_lift = clamp((pages_to_update * 1.2) + (new_pages * 2.2) + (new_faqs * 0.35) + (new_case_studies * 1.8) + (community_actions * 0.4), 0, 60)
+aeo_lift = clamp((new_faqs * 0.8) + (new_pages * 1.5) + (faq_schema is False) * 7 + (person_schema is False) * 5 + (external_citations is False) * 4, 0, 55)
+social_lift = clamp((linkedin_posts * 1.1) + (social_posts * 0.6) + (community_actions * 1.0), 0, 60)
+trust_lift = clamp((new_case_studies * 3) + (new_pages * 1.1) + (pages_to_update * 0.7) + (community_actions * 0.5), 0, 45)
+email_lift = clamp(newsletters * 4 + new_case_studies * 2, 0, 35)
+
+projected_trust = clamp(trust_score + trust_lift)
+projected_visibility = clamp(visibility_score + (seo_lift * 0.35 + aeo_lift * 0.25 + social_lift * 0.2 + email_lift * 0.1))
+
+base_sessions = max(metrics.get("ga4_sessions", 0), metrics.get("gsc_clicks", 0), organic_traffic_manual)
+session_lift_pct = (seo_lift * 0.008) + (social_lift * 0.004) + (email_lift * 0.003)
+incremental_sessions = int(base_sessions * session_lift_pct)
+incremental_leads = incremental_sessions * visitor_to_lead
+incremental_opps = incremental_leads * lead_to_opp
+incremental_clients = incremental_opps * opp_to_client
+incremental_revenue = incremental_clients * avg_deal_value
 
 # -----------------------------
-# Results dashboard
+# Dashboard
 # -----------------------------
-st.subheader("4. Resultado proyectado")
-col1, col2, col3, col4, col5, col6 = st.columns(6)
-col1.metric("SEO score", f"{projected_seo:.0f}/100", f"+{projected_seo - current_seo:.0f}")
-col2.metric("AEO/GEO score", f"{projected_aeo:.0f}/100", f"+{projected_aeo - current_aeo:.0f}")
-col3.metric("Trust Score", f"{projected_trust:.0f}/100", f"+{projected_trust - current_trust:.0f}")
-col4.metric("Visibility lift", f"{impact['Visibility lift %']:.1f}%")
-col5.metric("Incremental monthly revenue", f"${impact['Incremental revenue']:,.0f}")
-col6.metric("Email assisted revenue", f"${impact['Email incremental revenue']:,.0f}")
 
-left, right = st.columns(2)
-with left:
-    score_df = pd.DataFrame({"Area": list(current.keys()) + ["Trust Score"], "Current": list(current.values()) + [current_trust], "Projected": list(projected.values()) + [projected_trust]})
-    st.write("Current vs projected scores")
-    st.dataframe(score_df, use_container_width=True, hide_index=True)
-    st.bar_chart(score_df.set_index("Area"))
+st.subheader("Executive Dashboard")
+a, b, c, d = st.columns(4)
+a.metric("Trust Score", f"{trust_score:.0f}/100", f"Projected {projected_trust:.0f}")
+b.metric("Visibility Score", f"{visibility_score:.0f}/100", f"Projected {projected_visibility:.0f}")
+c.metric("Projected Sessions", f"+{incremental_sessions:,}")
+d.metric("Projected Revenue", f"${incremental_revenue:,.0f}")
 
-with right:
-    business_df = pd.DataFrame({
-        "Metric": ["Sessions", "Leads", "Opportunities", "Clients", "Revenue"],
-        "Current": [
-            biz["monthly_sessions"],
-            biz["monthly_sessions"] * biz["visit_to_lead"] / 100,
-            biz["monthly_sessions"] * biz["visit_to_lead"] / 100 * biz["lead_to_opp"] / 100,
-            biz["monthly_sessions"] * biz["visit_to_lead"] / 100 * biz["lead_to_opp"] / 100 * biz["opp_to_client"] / 100,
-            impact["Current revenue"],
-        ],
-        "Projected": [impact["Monthly sessions"], impact["Monthly leads"], impact["Monthly opportunities"], impact["Monthly clients"], impact["Monthly revenue"]],
-    })
-    st.write("Business impact")
-    st.dataframe(business_df, use_container_width=True, hide_index=True)
-    st.bar_chart(business_df.set_index("Metric")[["Current", "Projected"]])
+st.subheader("Score Breakdown")
+b1, b2, b3, b4, b5, b6 = st.columns(6)
+b1.metric("EEAT", f"{eeat_score:.0f}")
+b2.metric("Authority", f"{authority_score:.0f}")
+b3.metric("Content", f"{content_score:.0f}")
+b4.metric("AEO/GEO", f"{aeo_score:.0f}")
+b5.metric("Social", f"{social_presence_score:.0f}")
+b6.metric("Email", f"{email_score:.0f}")
 
-rank_df = pd.DataFrame({
-    "Scenario": ["Base", "After content changes"],
-    "Avg position estimate": [gsc["avg_position"] if gsc else 20, max(1, (gsc["avg_position"] if gsc else 20) - content_effect["estimated_position_gain"])],
-    "CTR estimate %": [gsc["ctr"] if gsc else 1.5, (gsc["ctr"] if gsc else 1.5) * (1 + content_effect["ctr_lift_pct"] / 100)],
+# Charts
+chart_df = pd.DataFrame({
+    "Area": ["Technical SEO", "Content", "Authority", "AEO/GEO", "Social", "Email", "Trust"],
+    "Score": [technical_score, content_score, authority_score, aeo_score, social_presence_score, email_score, trust_score]
 })
-st.write("Ranking and CTR projection")
-st.dataframe(rank_df, use_container_width=True, hide_index=True)
+st.bar_chart(chart_df.set_index("Area"))
 
-email_df = pd.DataFrame({
-    "Metric": ["Open rate", "Click rate", "Monthly email clicks"],
-    "Current": [email_effect["current_open_rate"], email_effect["current_click_rate"], email_effect["current_email_clicks"]],
-    "Projected": [email_effect["projected_open_rate"], email_effect["projected_click_rate"], email_effect["projected_email_clicks"]],
-})
-st.write("Email projection")
-st.dataframe(email_df, use_container_width=True, hide_index=True)
+# Data preview tabs
+st.subheader("Uploaded Data Summary")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["GSC", "GA4", "LinkedIn", "Social", "Email"])
+for tab, name, df in [(tab1, "Google Search Console", gsc), (tab2, "Google Analytics", ga4), (tab3, "LinkedIn", linkedin), (tab4, "Social Media", social), (tab5, "Email", email)]:
+    with tab:
+        if df is None:
+            st.info(f"No {name} CSV uploaded yet.")
+        else:
+            st.write(f"{name}: {df.shape[0]} rows, {df.shape[1]} columns")
+            st.dataframe(df.head(25), use_container_width=True)
 
-# -----------------------------
-# Recommendations
-# -----------------------------
-st.subheader("5. Recomendaciones automáticas")
-recommendations = []
-if gsc and not gsc["opportunities"].empty:
-    recommendations.append("Prioriza queries con muchas impresiones y posición 4 a 20. Son las más cercanas a convertirse en tráfico incremental con updates de contenido.")
-if content_effect["estimated_position_gain"] >= 3:
-    recommendations.append("El plan de contenido tiene potencial de mover rankings. Enfócate en refresh de páginas existentes, FAQs y links internos antes de crear demasiadas páginas nuevas.")
-if email_effect["incremental_email_clicks"] > 50:
-    recommendations.append("Email puede funcionar como acelerador de distribución: manda tráfico inicial a hubs, casos y páginas pilar para mejorar engagement y señales de demanda.")
-if projected_aeo - current_aeo >= projected_seo - current_seo:
-    recommendations.append("El mayor upside está en AEO/GEO: FAQs, direct answers, schema, entidades claras y contenido con pruebas concretas.")
-if "Reddit / community listening and answer mining" in selected_actions:
-    recommendations.append("Usa Reddit y comunidades como fuente de preguntas reales. Convierte patrones en FAQs, comparativas, páginas de problemas y respuestas cortas para AI search.")
-if "Email nurturing to SEO content hubs" in selected_actions:
-    recommendations.append("Crea secuencias por tema: problema, caso, guía, checklist y CTA. Cada email debe empujar una URL estratégica, no solo informar.")
-if projected_trust - current_trust >= 10:
-    recommendations.append("El Trust Score mejora de forma relevante. Usa estos resultados para vender confianza: casos, pruebas, FAQs, entidades claras y menciones externas.")
-if ahrefs and ahrefs["referring_domains"] < 50:
-    recommendations.append("La autoridad externa es baja. Prioriza menciones editoriales, directorios relevantes, alianzas, podcasts, reportes y PR digital antes de competir por keywords difíciles.")
-if impact["Incremental revenue"] < 500:
-    recommendations.append("El impacto de negocio parece bajo. Revisa tráfico mensual, conversion rate o deal value para validar si los supuestos son realistas.")
+# Opportunity Engine
+st.subheader("Opportunity Engine")
+opportunities = []
 
-for r in recommendations or ["Carga CSVs de GSC, GA4 o email para generar recomendaciones más específicas."]:
-    st.info(r)
+def add_op(title, reason, impact, effort, owner="Marketing"):
+    roi = impact / max(effort, 1)
+    opportunities.append({"Action": title, "Why it matters": reason, "Impact": impact, "Effort": effort, "ROI Score": round(roi, 2), "Owner": owner})
 
-if gsc and not gsc["opportunities"].empty:
-    st.write("Top oportunidades desde Google Search Console")
-    st.dataframe(gsc["opportunities"], use_container_width=True, hide_index=True)
-if ga4 and not ga4["top"].empty:
-    st.write("Top datos desde GA4")
-    st.dataframe(ga4["top"], use_container_width=True, hide_index=True)
-if yt and not yt["top"].empty:
-    st.write("Top videos / contenidos desde YouTube")
-    st.dataframe(yt["top"], use_container_width=True, hide_index=True)
-if email and not email["top"].empty:
-    st.write("Top campañas de email")
-    st.dataframe(email["top"], use_container_width=True, hide_index=True)
-if ahrefs and not ahrefs["top"].empty:
-    st.write("Top datos desde Ahrefs")
-    st.dataframe(ahrefs["top"], use_container_width=True, hide_index=True)
+if not faq_schema:
+    add_op("Add FAQ Schema to core service pages", "Improves AEO/GEO readiness and answer extraction.", 9, 2, "SEO/Web")
+if not person_schema and (founders_visible or team_visible):
+    add_op("Add Person Schema for founders and key experts", "Strengthens EEAT and entity clarity.", 8, 2, "SEO/Web")
+if not author_bios:
+    add_op("Add author bios to articles", "Improves expertise signals and trust.", 8, 3, "Content")
+if case_studies < 5:
+    add_op("Publish at least one proof-driven case study", "Improves conversion trust and sales enablement.", 10, 5, "Content/Sales")
+if metrics.get("gsc_ctr", 0) < 2 and metrics.get("gsc_impressions", 0) > 0:
+    add_op("Rewrite titles and meta descriptions for high-impression pages", "Low CTR means existing visibility is underused.", 9, 3, "SEO/Content")
+if domain_rating < 30 or referring_domains < 150:
+    add_op("Launch digital PR / partner backlink outreach", "Authority is limiting ranking potential.", 8, 6, "PR/Partnerships")
+if linkedin_posts < 8:
+    add_op("Increase LinkedIn executive posting cadence", "Supports social proof, trust and referral traffic.", 7, 3, "Social/Leadership")
+if community_actions < 5:
+    add_op("Monitor and answer relevant Reddit/community questions", "Helps discover demand, language, objections and AEO topics.", 6, 3, "Community")
+if newsletters < 2:
+    add_op("Send newsletter traffic to new content hubs", "Turns owned audience into website engagement and retargeting signals.", 7, 2, "Email")
+if external_citations is False:
+    add_op("Add credible external citations to strategic pages", "Improves trust, answer quality and AI-readiness.", 6, 2, "Content")
 
-# -----------------------------
-# Export
-# -----------------------------
-st.subheader("6. Exportar reporte")
-content_df = pd.DataFrame([content_effect]).assign(section="Content Projection")
-email_export_df = pd.DataFrame([email_effect]).assign(section="Email Projection")
-trust_df = pd.DataFrame([{"Current Trust Score": current_trust, "Projected Trust Score": projected_trust, "Trust Lift": projected_trust - current_trust}]).assign(section="Trust Score")
-report = pd.concat([
-    score_df.assign(section="Scores"),
-    business_df.assign(section="Business"),
-    rank_df.assign(section="Ranking"),
-    email_df.assign(section="Email"),
-    content_df,
-    email_export_df,
-    trust_df,
-], ignore_index=True, sort=False)
+opp_df = pd.DataFrame(opportunities).sort_values("ROI Score", ascending=False)
+st.dataframe(opp_df, use_container_width=True, hide_index=True)
 
-csv = report.to_csv(index=False).encode("utf-8")
-st.download_button("Download CSV report", data=csv, file_name=f"seo_aeo_business_report_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+# 7-Day Sprint
+st.subheader("7-Day Sprint")
+sprint = []
+base_actions = opp_df.head(7).to_dict("records")
+for i in range(7):
+    if i < len(base_actions):
+        row = base_actions[i]
+        sprint.append({"Day": f"Day {i+1}", "Action": row["Action"], "Expected Outcome": row["Why it matters"], "Owner": row["Owner"]})
+    else:
+        sprint.append({"Day": f"Day {i+1}", "Action": "Review performance and document learnings", "Expected Outcome": "Keep the next sprint grounded in data.", "Owner": "Marketing"})
 
-st.caption("Nota: este simulador usa heurísticas para priorización y escenarios. No reemplaza GSC, GA4, Ahrefs/Semrush ni modelos estadísticos avanzados, pero ayuda a explicar impacto potencial sin consumir tokens de AI.")
+sprint_df = pd.DataFrame(sprint)
+st.dataframe(sprint_df, use_container_width=True, hide_index=True)
+
+# Exports
+st.subheader("Export")
+report = {
+    "generated_at": datetime.utcnow().isoformat(),
+    "company": company_name,
+    "website": website_url,
+    "industry": industry,
+    "trust_score": round(trust_score, 2),
+    "projected_trust_score": round(projected_trust, 2),
+    "visibility_score": round(visibility_score, 2),
+    "projected_visibility_score": round(projected_visibility, 2),
+    "incremental_sessions": incremental_sessions,
+    "incremental_leads": round(incremental_leads, 2),
+    "incremental_opportunities": round(incremental_opps, 2),
+    "incremental_clients": round(incremental_clients, 2),
+    "incremental_revenue": round(incremental_revenue, 2),
+}
+report_df = pd.DataFrame([report])
+
+c1, c2, c3 = st.columns(3)
+c1.download_button("Download Executive Metrics CSV", report_df.to_csv(index=False).encode("utf-8"), "executive_metrics.csv", "text/csv")
+c2.download_button("Download Opportunities CSV", opp_df.to_csv(index=False).encode("utf-8"), "opportunities.csv", "text/csv")
+c3.download_button("Download 7-Day Sprint CSV", sprint_df.to_csv(index=False).encode("utf-8"), "seven_day_sprint.csv", "text/csv")
+
+st.caption("Model note: projections are directional. They are designed for prioritization, not guaranteed outcomes.")

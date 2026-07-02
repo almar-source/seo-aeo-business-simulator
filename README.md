@@ -1,57 +1,48 @@
-# SEO + AEO/GEO + Business Impact Simulator v4
+# Trust & Visibility Intelligence Platform
 
-Versión v4 con:
+Streamlit app for simulating SEO, AEO/GEO, trust, social visibility, email impact and 7-day action plans.
 
-- Google Search Console CSV
-- GA4 CSV con lector robusto para exports irregulares
-- YouTube Analytics CSV
-- Email marketing CSV
-- Ahrefs CSV
+## Features
+
+- Manual authority inputs when Ahrefs export is not available
+- Google Search Console CSV upload
+- Google Analytics 4 CSV upload
+- LinkedIn Analytics CSV upload
+- Social Media CSV upload
+- Email Marketing CSV upload
 - Trust Score
-- Proyección SEO, AEO/GEO, contenido, email y revenue
+- Visibility Score
+- Opportunity Engine
+- 7-Day Sprint recommendations
+- Business impact projection
+- CSV exports
 
-## Cómo correr localmente
+## Run locally
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Cómo subir Ahrefs
+## Deploy on Streamlit Community Cloud
 
-Exporta uno o varios reportes desde Ahrefs en CSV y súbelos en el campo `Ahrefs CSV`.
+1. Create or open your GitHub repository.
+2. Upload these root files:
+   - app.py
+   - requirements.txt
+   - README.md
+3. Go to Streamlit Community Cloud.
+4. Select the repository, branch, and `app.py` as the main file.
+5. Deploy or reboot the app.
 
-Reportes recomendados:
+## CSV notes
 
-1. Site Explorer > Overview > Export CSV
-2. Site Explorer > Backlinks > Export CSV
-3. Site Explorer > Referring domains > Export CSV
-4. Site Explorer > Top pages > Export CSV
-5. Site Explorer > Organic keywords > Export CSV
+The app is flexible with column names. It tries to detect common fields such as:
 
-El simulador intenta detectar columnas como:
+- GSC: clicks, impressions, ctr, position, query, page
+- GA4: sessions, users, active users, conversions, key events
+- LinkedIn: impressions, views, clicks, engagements, reactions
+- Social: impressions, reach, views, clicks, engagements, likes, comments, shares
+- Email: sent, recipients, delivered, opens, clicks
 
-- Domain Rating / DR
-- URL Rating / UR
-- Referring domains
-- Backlinks
-- Dofollow
-- Organic traffic
-- Anchor text
-- Target URL
-
-Si tienes varios exports, súbelos uno por uno y usa el que mejor represente la métrica que quieres analizar.
-
-## Trust Score
-
-El Trust Score combina señales de:
-
-- Content Quality
-- Authority
-- AEO/GEO Readiness
-- Proof signals
-- Case studies
-- Entity clarity
-- LinkedIn / executive visibility
-
-No es una métrica oficial de Google. Es un índice propio para priorizar acciones de confianza, autoridad y conversión.
+If your platform exports different names, rename the CSV columns before uploading.
