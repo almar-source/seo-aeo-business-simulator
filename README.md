@@ -1,32 +1,26 @@
-# Trust & Visibility Intelligence Platform v7
+# Trust & Visibility Intelligence Platform v8
 
-A Streamlit app that explains Trust, Visibility, Authority, AI Search Readiness, and business impact in plain language. Recommendations change dynamically based on uploaded data and manual inputs.
+Version v8 adds a dynamic recommendation engine.
+
+## What it does
+- Reads optional CSV files from GA4, GSC, LinkedIn, Social Media and Email Marketing.
+- Accepts manual inputs when data is unavailable.
+- Calculates Trust, Visibility, Authority, Content, Social, Email and AEO/GEO scores.
+- Detects the main limitations automatically.
+- Generates recommendations that change according to the diagnosis.
+- Builds a 7-day sprint based on the weakest areas.
+- Explains why each action matters and what business impact it may influence.
 
 ## Run locally
-
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Deploy on Streamlit Cloud
-
-Upload these files to the root of your GitHub repo:
-
+## Deploy on Streamlit
+Upload these files to the root of your GitHub repository:
 - app.py
 - requirements.txt
 - README.md
 
-Then reboot the app in Streamlit Cloud.
-
-## Data inputs
-
-Optional CSV uploads:
-
-- Google Search Console
-- Google Analytics 4
-- LinkedIn
-- Social media
-- Email marketing
-
-If uploads are missing or unreadable, the app uses manual inputs and clearly marks confidence as medium or low.
+Then reboot the app in Streamlit Community Cloud.
