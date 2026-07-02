@@ -1,41 +1,27 @@
-# Trust & Visibility Intelligence Platform 2.0
+# Trust & Visibility Intelligence Platform 2.2
 
-This is a modular Streamlit app for consulting-style visibility diagnosis.
+Versión visual-first con recomendaciones simples y dinámicas.
 
-## What it does
+## Cambios principales
 
-- Reads optional CSV files from Google Search Console, GA4, LinkedIn, social media, and email marketing.
-- Uses manual inputs when CSVs are missing or incomplete.
-- Calculates Trust Score, Visibility Score, Authority Score, Content Score, AEO/GEO readiness, Social and Email scores.
-- Generates a dynamic executive brief based on the data.
-- Applies a knowledge/recommendation engine from `knowledge/recommendation_rules.json`.
-- Simulates how actions such as articles, FAQs, LinkedIn posts, newsletters, case studies, and referring domains may affect visibility and business impact.
-- Produces a 7-day action plan.
-- Exports recommendations as CSV.
+- La parte visual aparece arriba: Trust, Visibility, AI Search, Authority y gráfico de breakdown.
+- Las recomendaciones son acciones sencillas, en tabla, y cambian según los datos.
+- La explicación larga queda colapsada para no confundir.
+- El simulador explica qué pasa si publicas más artículos, actualizas páginas, haces LinkedIn, email, FAQs, casos o consigues referring domains.
+- Mantiene la arquitectura modular.
 
-## How to run locally
+## Deploy
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Streamlit Cloud
-
-Upload all root files and folders to GitHub:
+Sube todo a GitHub en la raíz:
 
 ```text
 app.py
-requirements.txt
-README.md
 engines/
 parsers/
 knowledge/
 modules/
+requirements.txt
+README.md
 ```
 
-Then reboot the app in Streamlit Cloud.
-
-## Important
-
-This tool is not a ranking guarantee. It is a decision-support tool that helps prioritize actions based on available data and manual assumptions.
+Luego en Streamlit: Manage app -> Reboot app.

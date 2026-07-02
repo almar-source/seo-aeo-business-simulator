@@ -10,12 +10,53 @@ from engines.simulation import simulate, action_explanation
 
 st.set_page_config(page_title="Trust & Visibility Intelligence Platform", layout="wide")
 
-st.title("Trust & Visibility Intelligence Platform 2.0")
-st.caption("Arquitectura modular: datos, diagnóstico, conocimiento, recomendaciones, simulación y negocio.")
-st.write("La plataforma no promete resultados exactos. Explica qué puede estar frenando la visibilidad y prioriza acciones con mayor probabilidad de impacto.")
+# ---------- helpers ----------
+def status_text(score):
+    if score >= 75:
+        return "Fuerte"
+    if score >= 55:
+        return "En progreso"
+    if score >= 40:
+        return "Necesita atención"
+    return "Prioridad inmediata"
 
+def metric_card(col, title, value, note=""):
+    col.metric(title, f"{int(value)}/100", status_text(value))
+    if note:
+        col.caption(note)
+
+def simple_action_from_rec(rec):
+    title = rec.get("title", "Acción recomendada")
+    improves = ", ".join(rec.get("improves", [])[:3])
+    actions = rec.get("actions", [])
+    first_action = actions[0] if actions else title
+    return {
+        "Acción": first_action,
+        "Mejora": improves or "Visibilidad",
+        "Impacto": rec.get("impact", "Medio"),
+        "Esfuerzo": rec.get("effort", "Medio"),
+        "Cuándo se ve": rec.get("time_to_impact", "2 a 8 semanas"),
+        "Por qué aparece": rec.get("trigger", "Detectado por los datos")
+    }
+
+def explain_if_action(action_key, value):
+    if value <= 0:
+        return None
+    explanations = {
+        "articles": f"Publicar {value} artículos puede aumentar cobertura temática, keywords potenciales y probabilidad de aparecer en respuestas de IA.",
+        "pages": f"Actualizar {value} páginas ayuda a mejorar conversiones, claridad comercial y relevancia para Google.",
+        "faqs": f"Agregar {value} FAQs/direct answers facilita que Google y motores de IA entiendan respuestas específicas.",
+        "case_studies": f"Publicar {value} casos fortalece confianza, EEAT y conversión, aunque no siempre genere tráfico inmediato.",
+        "linkedin_posts": f"Publicar {value} veces por semana en LinkedIn aumenta distribución, búsquedas de marca y presencia ejecutiva.",
+        "newsletters": f"Enviar {value} newsletters al mes genera tráfico recurrente hacia el contenido y mejora engagement.",
+        "referring_domains": f"Conseguir {value} nuevos referring domains aumenta señales externas de autoridad y puede apoyar rankings.",
+    }
+    return explanations.get(action_key)
+
+# ---------- sidebar inputs ----------
 with st.sidebar:
     st.header("Inputs del negocio")
+    st.caption("Usa datos reales si los tienes. Si no, ingresa estimados manuales.")
     website = st.text_input("Website", "https://www.scalto.com")
 
     st.subheader("Autoridad manual")
@@ -68,88 +109,118 @@ inputs = {
     'faq_schema': faq_schema, 'organization_schema': organization_schema, 'article_schema': article_schema,
     'person_schema': person_schema, 'manual_social_score': manual_social_score, 'manual_email_score': manual_email_score
 }
-
 business = {'monthly_sessions': monthly_sessions, 'visitor_to_lead': visitor_to_lead, 'lead_to_customer': lead_to_customer, 'avg_deal_value': avg_deal_value}
 
-with st.expander("1. Cargar datos reales opcional", expanded=True):
+st.title("Trust & Visibility Intelligence Platform 2.2")
+st.caption("Visual first + recomendaciones simples y dinámicas")
+st.write("La herramienta muestra primero dónde está el negocio y luego traduce los datos en acciones concretas.")
+
+# ---------- uploads ----------
+with st.expander("Cargar datos reales opcional", expanded=False):
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: gsc_file = st.file_uploader("Google Search Console CSV", type=["csv"])
     with c2: ga4_file = st.file_uploader("GA4 CSV", type=["csv"])
     with c3: linkedin_file = st.file_uploader("LinkedIn CSV", type=["csv"])
     with c4: social_file = st.file_uploader("Social Media CSV", type=["csv"])
     with c5: email_file = st.file_uploader("Email Marketing CSV", type=["csv"])
-    st.info("No necesitas cargar todo. Si una plataforma no tiene data, el motor usa inputs manuales y baja el nivel de confianza.")
+    st.info("No necesitas cargar todo. Si falta data, la app usa los inputs manuales y baja la confianza del diagnóstico.")
 
-data_sources = []
-warnings = []
-
-gsc, w = parse_upload(gsc_file); warnings.append(('GSC', w)) if w else None
-ga4, w = parse_upload(ga4_file); warnings.append(('GA4', w)) if w else None
-linkedin, w = parse_upload(linkedin_file); warnings.append(('LinkedIn', w)) if w else None
-social, w = parse_upload(social_file); warnings.append(('Social', w)) if w else None
-email, w = parse_upload(email_file); warnings.append(('Email', w)) if w else None
+data_sources, warnings = [], []
+gsc, w = parse_upload(gsc_file)
+if w: warnings.append(('GSC', w))
+ga4, w = parse_upload(ga4_file)
+if w: warnings.append(('GA4', w))
+linkedin, w = parse_upload(linkedin_file)
+if w: warnings.append(('LinkedIn', w))
+social, w = parse_upload(social_file)
+if w: warnings.append(('Social', w))
+email, w = parse_upload(email_file)
+if w: warnings.append(('Email', w))
 
 for name, df in [('GSC', gsc), ('GA4', ga4), ('LinkedIn', linkedin), ('Social', social), ('Email', email)]:
     if df is not None and not df.empty:
         data_sources.append(name)
 
-if warnings:
-    st.warning("Algunos archivos tienen formato irregular. El motor intentó leerlos y usará inputs manuales cuando falten columnas: " + "; ".join([f"{n}: {w}" for n,w in warnings]))
-
 metrics = extract_metrics(gsc, ga4, linkedin, social, email)
 scores = compute_scores(inputs, metrics)
 recs = get_recommendations(scores, metrics)
-
-st.header("1. Executive Brief")
-cols = st.columns(4)
-summary_metrics = [('Trust Score', scores['trust']), ('Visibility Score', scores['visibility']), ('AI Search Readiness', scores['aeo']), ('Authority Score', scores['authority'])]
-for col, (name, value) in zip(cols, summary_metrics):
-    col.metric(name, f"{value}/100", label(value))
-
-st.subheader("Qué significa esto")
-for line in executive_brief(scores, metrics, data_sources):
-    st.write("• " + line)
-
 strongest, weakest = strongest_and_weakest(scores)
-st.subheader("Diagnóstico principal")
-st.write(f"**Cuello de botella actual:** {weakest.replace('_',' ').title()}.")
-st.write(f"**Fortaleza actual:** {strongest.replace('_',' ').title()}.")
 
-with st.expander("Ver cómo se calculan los scores", expanded=False):
-    st.write("**Trust Score** = EEAT, Authority, Content, AEO/GEO, Social, Email y Technical SEO.")
-    st.write("**Visibility Score** = Authority, Content, Technical SEO, AEO/GEO, Social y Email.")
-    st.write("**Authority Score** no es igual a DR. Usa DR, referring domains, backlinks, brand mentions y menciones en medios.")
-    breakdown = pd.DataFrame({
-        'Factor': ['EEAT','Authority','Content','Technical SEO','AEO/GEO','Social','Email'],
-        'Score': [scores['eeat'], scores['authority'], scores['content'], scores['technical_seo'], scores['aeo'], scores['social'], scores['email']]
-    })
-    fig = go.Figure(go.Bar(x=breakdown['Factor'], y=breakdown['Score']))
-    fig.update_layout(yaxis_range=[0,100], height=360)
+# ---------- VISUAL FIRST ----------
+st.header("1. Estado visual del negocio")
+
+m1, m2, m3, m4 = st.columns(4)
+metric_card(m1, "Trust Score", scores['trust'], "Confianza que transmite la marca")
+metric_card(m2, "Visibility Score", scores['visibility'], "Capacidad de ser encontrada")
+metric_card(m3, "AI Search Readiness", scores['aeo'], "Preparación para respuestas de IA")
+metric_card(m4, "Authority Score", scores['authority'], f"DR usado como input: {domain_rating}")
+
+breakdown = pd.DataFrame({
+    'Factor': ['EEAT','Authority','Content','Technical SEO','AEO/GEO','Social','Email'],
+    'Score': [scores['eeat'], scores['authority'], scores['content'], scores['technical_seo'], scores['aeo'], scores['social'], scores['email']]
+})
+
+chart_col, story_col = st.columns([1.35, 1])
+with chart_col:
+    fig = go.Figure(go.Bar(x=breakdown['Factor'], y=breakdown['Score'], text=breakdown['Score'], textposition='outside'))
+    fig.update_layout(yaxis_range=[0,100], height=390, margin=dict(l=20,r=20,t=40,b=20), title="Score breakdown")
     st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(breakdown, use_container_width=True)
+with story_col:
+    st.subheader("Lectura simple")
+    weak_row = breakdown.sort_values('Score').iloc[0]
+    strong_row = breakdown.sort_values('Score', ascending=False).iloc[0]
+    st.write(f"**Mayor fortaleza:** {strong_row['Factor']} ({int(strong_row['Score'])}/100).")
+    st.write(f"**Mayor limitación:** {weak_row['Factor']} ({int(weak_row['Score'])}/100).")
+    if weak_row['Factor'] == 'Social':
+        st.warning("La prioridad no es solo crear contenido. Falta distribución y presencia fuera del sitio.")
+    elif weak_row['Factor'] == 'Authority':
+        st.warning("El cuello de botella es autoridad: faltan señales externas como menciones, backlinks y partnerships.")
+    elif weak_row['Factor'] == 'Content':
+        st.warning("La oportunidad principal está en mejorar o ampliar contenido comercial y educativo.")
+    elif weak_row['Factor'] == 'Email':
+        st.warning("Hay oportunidad de activar mejor la base existente con newsletters y nurturing.")
+    elif weak_row['Factor'] == 'AEO/GEO':
+        st.warning("La marca necesita más respuestas directas, FAQs y estructura para AI Search.")
+    else:
+        st.warning("La prioridad está en corregir la base antes de acelerar distribución.")
 
-st.header("2. Recomendaciones dinámicas")
-st.write("Estas recomendaciones cambian según los datos cargados y los inputs manuales.")
-if not recs:
-    st.success("No se detectaron cuellos de botella críticos. Recomendación: mantener ejecución y medir evolución semanal.")
+    st.caption("Los scores no son promesas. Son una forma de priorizar qué hacer primero.")
+
+st.subheader("Datos cargados")
+s1, s2, s3, s4 = st.columns(4)
+s1.metric("Fuentes cargadas", f"{len(data_sources)}/5")
+s2.metric("Sesiones detectadas", f"{int(metrics.get('sessions', 0)):,}")
+s3.metric("GSC clicks", f"{int(metrics.get('gsc_clicks', 0)):,}")
+s4.metric("GSC impressions", f"{int(metrics.get('gsc_impressions', 0)):,}")
+if warnings:
+    st.info("Algunos CSV tienen formato irregular. La app usará lo que pueda leer y completará con inputs manuales: " + '; '.join([f'{n}: {w}' for n,w in warnings]))
+
+# ---------- SIMPLE DYNAMIC RECOMMENDATIONS ----------
+st.header("2. Acciones recomendadas")
+st.write("Estas acciones cambian según los datos e inputs. Están escritas para ejecución, no como auditoría técnica.")
+
+simple_recs = [simple_action_from_rec(r) for r in recs[:5]]
+if simple_recs:
+    rec_df = pd.DataFrame(simple_recs)
+    st.dataframe(rec_df, use_container_width=True, hide_index=True)
 else:
-    for i, r in enumerate(recs[:6], start=1):
-        with st.container(border=True):
-            st.subheader(f"Prioridad {i}: {r['title']}")
-            st.write(f"**Por qué aparece:** {r['trigger']}.")
+    st.success("No se detectó una limitación crítica. Mantén ejecución semanal y mide evolución.")
+
+if recs:
+    with st.expander("Ver explicación de cada recomendación", expanded=False):
+        for i, r in enumerate(recs[:5], start=1):
+            st.markdown(f"### {i}. {r['title']}")
+            st.write(f"**Por qué aparece:** {r['trigger']}")
             st.write(r['why'])
             st.write("**Acciones inmediatas:**")
-            for a in r['actions']:
+            for a in r.get('actions', [])[:3]:
                 st.write("- " + a)
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Impacto", r['impact'])
-            m2.metric("Esfuerzo", r['effort'])
-            m3.metric("Tiempo", r['time_to_impact'])
-            m4.metric("Confianza", r['confidence'])
-            st.caption("Mejora: " + ", ".join(r['improves']))
+            st.caption("Mejora: " + ", ".join(r.get('improves', [])))
 
-st.header("3. Qué pasa si hago esto")
-st.write("Mueve las acciones y la herramienta explica el posible impacto en visibilidad, confianza y negocio.")
+# ---------- SCENARIO SIMULATOR ----------
+st.header("3. Qué pasaría si hago estas acciones")
+st.write("Mueve los controles. La herramienta explica qué puede mejorar y muestra el impacto estimado en negocio.")
+
 sc1, sc2, sc3, sc4 = st.columns(4)
 with sc1:
     sim_articles = st.slider("Artículos nuevos", 0, 20, 2)
@@ -166,21 +237,32 @@ with sc4:
 actions = {'articles': sim_articles, 'pages': sim_pages, 'faqs': sim_faqs, 'case_studies': sim_cases, 'linkedin_posts': sim_linkedin, 'newsletters': sim_newsletters, 'referring_domains': sim_ref_domains}
 projected, biz = simulate(scores, actions, business)
 
-pcols = st.columns(5)
-pcols[0].metric("Trust", f"{scores['trust']} → {projected['trust']}")
-pcols[1].metric("Visibility", f"{scores['visibility']} → {projected['visibility']}")
-pcols[2].metric("AI Search", f"{scores['aeo']} → {projected['aeo']}")
-pcols[3].metric("Added leads", biz['added_leads'])
-pcols[4].metric("Revenue estimado", f"${biz['projected_revenue']:,}")
+p1, p2, p3, p4, p5 = st.columns(5)
+p1.metric("Trust", f"{scores['trust']} → {projected['trust']}")
+p2.metric("Visibility", f"{scores['visibility']} → {projected['visibility']}")
+p3.metric("AI Search", f"{scores['aeo']} → {projected['aeo']}")
+p4.metric("Leads adicionales", biz['added_leads'])
+p5.metric("Revenue estimado", f"${biz['projected_revenue']:,}")
 
-st.subheader("Explicación del efecto")
-for line in action_explanation(actions):
-    st.write("• " + line)
+explanations = [explain_if_action(k, v) for k, v in actions.items()]
+explanations = [e for e in explanations if e]
+with st.container(border=True):
+    st.subheader("Explicación en lenguaje simple")
+    for e in explanations:
+        st.write("• " + e)
 
-st.header("4. Plan recomendado para los próximos 7 días")
+# ---------- PLAN ----------
+st.header("4. Plan de 7 días")
 plan = seven_day_plan(recs)
 plan_df = pd.DataFrame(plan, columns=['Día', 'Acción recomendada'])
 st.dataframe(plan_df, use_container_width=True, hide_index=True)
+
+# ---------- TECH DETAILS BELOW ----------
+with st.expander("Detalles técnicos y fórmula de scores", expanded=False):
+    st.write("**Authority Score** no es igual a DR. Combina DR, referring domains, backlinks, brand mentions y menciones en medios.")
+    st.write("**Trust Score** combina EEAT, Authority, Content, AEO/GEO, Social, Email y Technical SEO.")
+    st.write("**Visibility Score** combina Authority, Content, Technical SEO, AEO/GEO, Social y Email.")
+    st.dataframe(breakdown, use_container_width=True, hide_index=True)
 
 st.header("5. Export")
 export_rows = []
