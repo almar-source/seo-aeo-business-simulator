@@ -1,26 +1,41 @@
-# Trust & Visibility Intelligence Platform v8
+# Trust & Visibility Intelligence Platform 2.0
 
-Version v8 adds a dynamic recommendation engine.
+This is a modular Streamlit app for consulting-style visibility diagnosis.
 
 ## What it does
-- Reads optional CSV files from GA4, GSC, LinkedIn, Social Media and Email Marketing.
-- Accepts manual inputs when data is unavailable.
-- Calculates Trust, Visibility, Authority, Content, Social, Email and AEO/GEO scores.
-- Detects the main limitations automatically.
-- Generates recommendations that change according to the diagnosis.
-- Builds a 7-day sprint based on the weakest areas.
-- Explains why each action matters and what business impact it may influence.
 
-## Run locally
+- Reads optional CSV files from Google Search Console, GA4, LinkedIn, social media, and email marketing.
+- Uses manual inputs when CSVs are missing or incomplete.
+- Calculates Trust Score, Visibility Score, Authority Score, Content Score, AEO/GEO readiness, Social and Email scores.
+- Generates a dynamic executive brief based on the data.
+- Applies a knowledge/recommendation engine from `knowledge/recommendation_rules.json`.
+- Simulates how actions such as articles, FAQs, LinkedIn posts, newsletters, case studies, and referring domains may affect visibility and business impact.
+- Produces a 7-day action plan.
+- Exports recommendations as CSV.
+
+## How to run locally
+
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Deploy on Streamlit
-Upload these files to the root of your GitHub repository:
-- app.py
-- requirements.txt
-- README.md
+## Streamlit Cloud
 
-Then reboot the app in Streamlit Community Cloud.
+Upload all root files and folders to GitHub:
+
+```text
+app.py
+requirements.txt
+README.md
+engines/
+parsers/
+knowledge/
+modules/
+```
+
+Then reboot the app in Streamlit Cloud.
+
+## Important
+
+This tool is not a ranking guarantee. It is a decision-support tool that helps prioritize actions based on available data and manual assumptions.
