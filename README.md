@@ -1,28 +1,32 @@
-# Trust & Visibility Intelligence Platform v6
+# Trust & Visibility Intelligence Platform v7
 
-App de Streamlit para explicar cómo acciones de contenido, SEO, AEO/GEO, LinkedIn, social media y email pueden impactar visibilidad, confianza y negocio.
+A Streamlit app that explains Trust, Visibility, Authority, AI Search Readiness, and business impact in plain language. Recommendations change dynamically based on uploaded data and manual inputs.
 
-## Cómo correr localmente
+## Run locally
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Cómo subir a Streamlit Cloud
+## Deploy on Streamlit Cloud
 
-1. Sube `app.py`, `requirements.txt` y `README.md` a la raíz del repositorio de GitHub.
-2. En Streamlit Cloud, selecciona el repo y `app.py` como main file.
-3. Haz Reboot app.
+Upload these files to the root of your GitHub repo:
 
-## Datos soportados
+- app.py
+- requirements.txt
+- README.md
 
-Puedes usar inputs manuales o subir CSVs de:
+Then reboot the app in Streamlit Cloud.
+
+## Data inputs
+
+Optional CSV uploads:
 
 - Google Search Console
-- GA4
-- LinkedIn Analytics
-- Social Media
-- Email Marketing
+- Google Analytics 4
+- LinkedIn
+- Social media
+- Email marketing
 
-La app usa lector robusto para CSVs con separadores y encabezados irregulares.
+If uploads are missing or unreadable, the app uses manual inputs and clearly marks confidence as medium or low.
