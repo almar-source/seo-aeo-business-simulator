@@ -1,63 +1,57 @@
-# SEO + AEO/GEO + Business Impact Simulator v3
+# SEO + AEO/GEO + Business Impact Simulator v4
 
-Simulador en Streamlit para proyectar impacto SEO, AEO/GEO, contenido, email marketing y negocio.
+Versión v4 con:
 
-## Qué incluye
+- Google Search Console CSV
+- GA4 CSV con lector robusto para exports irregulares
+- YouTube Analytics CSV
+- Email marketing CSV
+- Ahrefs CSV
+- Trust Score
+- Proyección SEO, AEO/GEO, contenido, email y revenue
 
-- Carga de CSV de Google Search Console
-- Carga de CSV de GA4
-- Carga de CSV de YouTube Analytics
-- Carga de CSV de Email Marketing
-- Simulación de cambios de contenido:
-  - páginas actualizadas
-  - nuevas páginas/artículos
-  - FAQs/direct answers
-  - casos/testimonios
-  - links internos
-  - mejoras en title/meta
-  - cobertura temática
-  - pruebas/E-E-A-T
-- Simulación de email:
-  - tamaño de lista
-  - campañas por mes
-  - open rate
-  - click rate
-  - mejoras por asunto, CTA, segmentación y relevancia
-- Proyección de:
-  - ranking promedio
-  - CTR
-  - sesiones
-  - leads
-  - oportunidades
-  - clientes
-  - revenue mensual incremental
-- Export de reporte CSV
-
-## Instalación local
+## Cómo correr localmente
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Deploy en Streamlit
+## Cómo subir Ahrefs
 
-Sube estos archivos al repositorio de GitHub conectado a Streamlit:
+Exporta uno o varios reportes desde Ahrefs en CSV y súbelos en el campo `Ahrefs CSV`.
 
-- `app.py`
-- `requirements.txt`
-- `README.md`
+Reportes recomendados:
 
-Streamlit hará redeploy automático.
+1. Site Explorer > Overview > Export CSV
+2. Site Explorer > Backlinks > Export CSV
+3. Site Explorer > Referring domains > Export CSV
+4. Site Explorer > Top pages > Export CSV
+5. Site Explorer > Organic keywords > Export CSV
 
-## Nota
+El simulador intenta detectar columnas como:
 
-No usa OpenAI API ni consume tokens. Las proyecciones son heurísticas para planificación, priorización y explicación de impacto de negocio.
+- Domain Rating / DR
+- URL Rating / UR
+- Referring domains
+- Backlinks
+- Dofollow
+- Organic traffic
+- Anchor text
+- Target URL
 
-## Update v3.2
+Si tienes varios exports, súbelos uno por uno y usa el que mejor represente la métrica que quieres analizar.
 
-This version adds a safer CSV reader for GA4 exports such as **Acquisition overview.csv**, where Google Analytics includes several mini tables and metadata lines in the same CSV file. The app now reads those files without crashing and extracts sessions, active users, channel data, and other available metrics when present.
+## Trust Score
 
+El Trust Score combina señales de:
 
-## v3.3
-Incluye lector robusto para CSVs de GA4 con múltiples mini-tablas, metadata rows y filas irregulares.
+- Content Quality
+- Authority
+- AEO/GEO Readiness
+- Proof signals
+- Case studies
+- Entity clarity
+- LinkedIn / executive visibility
+
+No es una métrica oficial de Google. Es un índice propio para priorizar acciones de confianza, autoridad y conversión.

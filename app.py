@@ -8,8 +8,8 @@ import streamlit as st
 st.set_page_config(page_title="SEO + AEO + Business Impact Simulator", layout="wide")
 
 st.title("SEO + AEO/GEO + Business Impact Simulator")
-st.caption("Versión v3.3 con lector robusto para exports irregulares de GA4")
-st.caption("Carga datos reales de GSC, GA4, YouTube y Email Marketing. Simula cómo cambios de contenido, acciones offsite y campañas afectan ranking, tráfico, leads y revenue.")
+st.caption("Versión v4.0 con Trust Score y carga de Ahrefs CSV")
+st.caption("Carga datos reales de GSC, GA4, YouTube, Email Marketing y Ahrefs. Simula cómo cambios de contenido, acciones offsite y campañas afectan ranking, tráfico, leads y revenue.")
 
 # -----------------------------
 # Utility functions
@@ -322,6 +322,80 @@ def email_metrics(df):
     return {"sent": sent, "delivered": delivered, "opens": opens, "clicks": clicks, "open_rate": open_rate, "click_rate": click_rate, "click_to_open": click_to_open, "unsub_rate": unsub_rate, "top": top}
 
 
+
+def ahrefs_metrics(df):
+    """Reads common Ahrefs CSV exports: Site Explorer overview, backlinks, referring domains, pages, organic keywords.
+
+    The parser is defensive because Ahrefs exports vary by report. It looks for common
+    columns and, when possible, estimates authority/offsite signals from the data.
+    """
+    if df is None or df.empty:
+        return None
+
+    # Handle simple key/value exports if present.
+    cols = list(df.columns)
+    key_col = find_col(df, ["metric", "name", "item", "label", "parameter"])
+    val_col = find_col(df, ["value", "valor", "count", "total"])
+    kv = {}
+    if key_col and val_col:
+        for _, row in df[[key_col, val_col]].dropna().iterrows():
+            key = str(row[key_col]).strip().lower().replace(" ", "_").replace("-", "_")
+            try:
+                val = float(str(row[val_col]).replace(",", ""))
+                kv[key] = val
+            except Exception:
+                pass
+
+    dr_col = find_col(df, ["domain_rating", "dr"])
+    ur_col = find_col(df, ["url_rating", "ur"])
+    rd_col = find_col(df, ["referring_domains", "ref_domains", "domains", "domain"] )
+    backlinks_col = find_col(df, ["backlinks", "backlink", "links", "external_links"])
+    dofollow_col = find_col(df, ["dofollow", "do_follow", "follow"] )
+    traffic_col = find_col(df, ["organic_traffic", "traffic", "trafico", "tráfico"] )
+    anchor_col = find_col(df, ["anchor", "anchor_text"] )
+    target_col = find_col(df, ["target_url", "target", "url", "page", "referring_page_url"] )
+
+    def kv_find(names, default=0):
+        for name in names:
+            n = name.lower().replace(" ", "_").replace("-", "_")
+            for k, v in kv.items():
+                if n in k or k in n:
+                    return v
+        return default
+
+    dr = to_numeric(df[dr_col]).max() if dr_col else kv_find(["domain_rating", "dr"], 0)
+    ur = to_numeric(df[ur_col]).mean() if ur_col else kv_find(["url_rating", "ur"], 0)
+    referring_domains = int(to_numeric(df[rd_col]).sum()) if rd_col and rd_col != target_col else int(kv_find(["referring_domains", "ref_domains"], 0))
+    if referring_domains == 0 and rd_col and rd_col == "domain":
+        referring_domains = int(df[rd_col].nunique())
+    backlinks = int(to_numeric(df[backlinks_col]).sum()) if backlinks_col else int(kv_find(["backlinks"], len(df)))
+    if backlinks == 0 and len(df) > 0:
+        backlinks = len(df)
+    organic_traffic = to_numeric(df[traffic_col]).sum() if traffic_col else kv_find(["organic_traffic", "traffic"], 0)
+
+    dofollow_share = 0
+    if dofollow_col:
+        vals = df[dofollow_col].astype(str).str.lower()
+        dofollow_share = (vals.str.contains("true|yes|dofollow|follow", regex=True).mean() * 100) if len(vals) else 0
+
+    top = pd.DataFrame()
+    if target_col:
+        visible = [c for c in [target_col, anchor_col, backlinks_col, rd_col, traffic_col, dr_col, ur_col] if c]
+        top = df[visible].head(25)
+
+    authority_signal = clamp((dr * 1.2) + np.log1p(max(referring_domains, 0)) * 8 + np.log1p(max(backlinks, 0)) * 3 + dofollow_share * 0.10)
+
+    return {
+        "domain_rating": float(dr or 0),
+        "url_rating": float(ur or 0),
+        "referring_domains": int(referring_domains or 0),
+        "backlinks": int(backlinks or 0),
+        "dofollow_share": float(dofollow_share or 0),
+        "organic_traffic": float(organic_traffic or 0),
+        "authority_signal": authority_signal,
+        "top": top,
+    }
+
 def calculate_content_effect(content_inputs):
     """Estimates ranking movement and visibility lift from content-specific changes."""
     score = 0
@@ -479,7 +553,7 @@ def calculate_business_impact(current_seo, projected_seo, current_aeo, projected
 # Data upload section
 # -----------------------------
 with st.expander("1. Cargar datos reales opcional", expanded=True):
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         gsc_file = st.file_uploader("Google Search Console CSV", type=["csv"], key="gsc")
     with c2:
@@ -488,13 +562,16 @@ with st.expander("1. Cargar datos reales opcional", expanded=True):
         yt_file = st.file_uploader("YouTube Analytics CSV", type=["csv"], key="yt")
     with c4:
         email_file = st.file_uploader("Email marketing CSV", type=["csv"], key="email")
-    st.caption("Email CSV puede venir de Mailchimp, HubSpot, Brevo, ActiveCampaign, etc. El simulador intenta detectar columnas como sent, delivered, opens, clicks y unsubscribes.")
+    with c5:
+        ahrefs_file = st.file_uploader("Ahrefs CSV", type=["csv"], key="ahrefs")
+    st.caption("Email CSV puede venir de Mailchimp, HubSpot, Brevo, ActiveCampaign, etc. Ahrefs puede venir de Site Explorer Overview, Backlinks, Referring Domains, Top Pages u Organic Keywords.")
 
 
 gsc = gsc_metrics(read_uploaded_csv(gsc_file))
 ga4 = ga4_metrics(read_uploaded_csv(ga4_file))
 yt = yt_metrics(read_uploaded_csv(yt_file))
 email = email_metrics(read_uploaded_csv(email_file))
+ahrefs = ahrefs_metrics(read_uploaded_csv(ahrefs_file))
 
 search_demand_score = 35
 query_intent_score = 35
@@ -518,12 +595,15 @@ if email:
     email_list_default = int(max(email["delivered"], 1))
     email_open_default = float(round(email["open_rate"], 2))
     email_click_default = float(round(email["click_rate"], 2))
+if ahrefs:
+    if ahrefs["authority_signal"] > offsite_signal:
+        offsite_signal = ahrefs["authority_signal"]
 
 data_signal = {"search_demand_score": search_demand_score, "query_intent_score": query_intent_score, "offsite_signal": offsite_signal}
 
-if any([gsc, ga4, yt, email]):
+if any([gsc, ga4, yt, email, ahrefs]):
     st.subheader("Resumen de datos cargados")
-    cards = st.columns(8)
+    cards = st.columns(10)
     if gsc:
         cards[0].metric("GSC clicks", f"{gsc['clicks']:,.0f}")
         cards[1].metric("GSC impressions", f"{gsc['impressions']:,.0f}")
@@ -536,15 +616,20 @@ if any([gsc, ga4, yt, email]):
     if email:
         cards[6].metric("Email open rate", f"{email['open_rate']:.1f}%")
         cards[7].metric("Email click rate", f"{email['click_rate']:.1f}%")
+    if ahrefs:
+        cards[8].metric("Ahrefs DR", f"{ahrefs['domain_rating']:.0f}")
+        cards[9].metric("Ref domains", f"{ahrefs['referring_domains']:,.0f}")
 
 # -----------------------------
 # Sidebar inputs
 # -----------------------------
 st.sidebar.header("Website inputs")
 st.sidebar.caption("Puedes cargar datos reales o ajustar manualmente de 0 a 100.")
+dr_default = int(ahrefs["domain_rating"]) if ahrefs and ahrefs["domain_rating"] > 0 else 19
+rd_default = int(ahrefs["referring_domains"]) if ahrefs and ahrefs["referring_domains"] > 0 else 127
 inputs = {
-    "domain_rating": st.sidebar.number_input("Domain Rating", 0, 100, 19),
-    "ref_domains": st.sidebar.number_input("Referring domains", 0, 10000, 127),
+    "domain_rating": st.sidebar.number_input("Domain Rating", 0, 100, dr_default),
+    "ref_domains": st.sidebar.number_input("Referring domains", 0, 1000000, rd_default),
     "unique_titles": st.sidebar.slider("Unique titles", 0, 100, 35),
     "unique_meta": st.sidebar.slider("Unique meta descriptions", 0, 100, 35),
     "clean_h_structure": st.sidebar.slider("Clean H1/H2 structure", 0, 100, 45),
@@ -653,22 +738,34 @@ selected_actions = st.multiselect(
 )
 
 current, projected, current_seo, projected_seo, current_aeo, projected_aeo, action_biz_bonus = calculate_scores(inputs, selected_actions, data_signal, content_effect, email_effect)
+current_trust = clamp(
+    current["Content Quality"] * 0.24 + current["Authority"] * 0.22 + current["AEO/GEO Readiness"] * 0.18 +
+    inputs["proof_signals"] * 0.14 + inputs["case_studies"] * 0.10 + inputs["entity_clarity"] * 0.07 + inputs["linkedin_visibility"] * 0.05
+)
+projected_trust = clamp(
+    projected["Content Quality"] * 0.24 + projected["Authority"] * 0.22 + projected["AEO/GEO Readiness"] * 0.18 +
+    clamp(inputs["proof_signals"] + content_inputs["eeat_proof_delta"] * 0.45) * 0.14 +
+    clamp(inputs["case_studies"] + content_inputs["case_studies_added"] * 3.0) * 0.10 +
+    clamp(inputs["entity_clarity"] + content_inputs["structured_answer_delta"] * 0.25) * 0.07 +
+    inputs["linkedin_visibility"] * 0.05
+)
 impact = calculate_business_impact(current_seo, projected_seo, current_aeo, projected_aeo, biz, action_biz_bonus, content_effect, email_effect)
 
 # -----------------------------
 # Results dashboard
 # -----------------------------
 st.subheader("4. Resultado proyectado")
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("SEO score", f"{projected_seo:.0f}/100", f"+{projected_seo - current_seo:.0f}")
 col2.metric("AEO/GEO score", f"{projected_aeo:.0f}/100", f"+{projected_aeo - current_aeo:.0f}")
-col3.metric("Visibility lift", f"{impact['Visibility lift %']:.1f}%")
-col4.metric("Incremental monthly revenue", f"${impact['Incremental revenue']:,.0f}")
-col5.metric("Email assisted revenue", f"${impact['Email incremental revenue']:,.0f}")
+col3.metric("Trust Score", f"{projected_trust:.0f}/100", f"+{projected_trust - current_trust:.0f}")
+col4.metric("Visibility lift", f"{impact['Visibility lift %']:.1f}%")
+col5.metric("Incremental monthly revenue", f"${impact['Incremental revenue']:,.0f}")
+col6.metric("Email assisted revenue", f"${impact['Email incremental revenue']:,.0f}")
 
 left, right = st.columns(2)
 with left:
-    score_df = pd.DataFrame({"Area": list(current.keys()), "Current": list(current.values()), "Projected": list(projected.values())})
+    score_df = pd.DataFrame({"Area": list(current.keys()) + ["Trust Score"], "Current": list(current.values()) + [current_trust], "Projected": list(projected.values()) + [projected_trust]})
     st.write("Current vs projected scores")
     st.dataframe(score_df, use_container_width=True, hide_index=True)
     st.bar_chart(score_df.set_index("Area"))
@@ -722,6 +819,10 @@ if "Reddit / community listening and answer mining" in selected_actions:
     recommendations.append("Usa Reddit y comunidades como fuente de preguntas reales. Convierte patrones en FAQs, comparativas, páginas de problemas y respuestas cortas para AI search.")
 if "Email nurturing to SEO content hubs" in selected_actions:
     recommendations.append("Crea secuencias por tema: problema, caso, guía, checklist y CTA. Cada email debe empujar una URL estratégica, no solo informar.")
+if projected_trust - current_trust >= 10:
+    recommendations.append("El Trust Score mejora de forma relevante. Usa estos resultados para vender confianza: casos, pruebas, FAQs, entidades claras y menciones externas.")
+if ahrefs and ahrefs["referring_domains"] < 50:
+    recommendations.append("La autoridad externa es baja. Prioriza menciones editoriales, directorios relevantes, alianzas, podcasts, reportes y PR digital antes de competir por keywords difíciles.")
 if impact["Incremental revenue"] < 500:
     recommendations.append("El impacto de negocio parece bajo. Revisa tráfico mensual, conversion rate o deal value para validar si los supuestos son realistas.")
 
@@ -740,6 +841,9 @@ if yt and not yt["top"].empty:
 if email and not email["top"].empty:
     st.write("Top campañas de email")
     st.dataframe(email["top"], use_container_width=True, hide_index=True)
+if ahrefs and not ahrefs["top"].empty:
+    st.write("Top datos desde Ahrefs")
+    st.dataframe(ahrefs["top"], use_container_width=True, hide_index=True)
 
 # -----------------------------
 # Export
@@ -747,6 +851,7 @@ if email and not email["top"].empty:
 st.subheader("6. Exportar reporte")
 content_df = pd.DataFrame([content_effect]).assign(section="Content Projection")
 email_export_df = pd.DataFrame([email_effect]).assign(section="Email Projection")
+trust_df = pd.DataFrame([{"Current Trust Score": current_trust, "Projected Trust Score": projected_trust, "Trust Lift": projected_trust - current_trust}]).assign(section="Trust Score")
 report = pd.concat([
     score_df.assign(section="Scores"),
     business_df.assign(section="Business"),
@@ -754,6 +859,7 @@ report = pd.concat([
     email_df.assign(section="Email"),
     content_df,
     email_export_df,
+    trust_df,
 ], ignore_index=True, sort=False)
 
 csv = report.to_csv(index=False).encode("utf-8")
